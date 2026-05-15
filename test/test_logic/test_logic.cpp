@@ -131,6 +131,66 @@ void test_oldest_with_holes(void) {
 }
 
 // ------------------------------------------------------------
+// Этап 9 — downsample
+// ------------------------------------------------------------
+void test_downsample_empty_input(void) {
+    std::vector<float> in;
+    auto out = downsample(in, 12);
+    TEST_ASSERT_EQUAL_size_t(12, out.size());
+    for (float v : out) TEST_ASSERT_EQUAL_FLOAT(0.0f, v);
+}
+
+void test_downsample_target_zero_or_negative(void) {
+    auto out1 = downsample({1.0f, 2.0f}, 0);
+    TEST_ASSERT_EQUAL_size_t(0, out1.size());
+    auto out2 = downsample({1.0f, 2.0f}, -5);
+    TEST_ASSERT_EQUAL_size_t(0, out2.size());
+}
+
+void test_downsample_passthrough(void) {
+    std::vector<float> in{1.0f, 2.0f, 3.0f};
+    auto out = downsample(in, 3);
+    TEST_ASSERT_EQUAL_size_t(3, out.size());
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, out[0]);
+    TEST_ASSERT_EQUAL_FLOAT(2.0f, out[1]);
+    TEST_ASSERT_EQUAL_FLOAT(3.0f, out[2]);
+}
+
+void test_downsample_4_to_2_averages(void) {
+    std::vector<float> in{1.0f, 2.0f, 3.0f, 4.0f};
+    auto out = downsample(in, 2);
+    TEST_ASSERT_EQUAL_size_t(2, out.size());
+    TEST_ASSERT_EQUAL_FLOAT(1.5f, out[0]);  // avg(1,2)
+    TEST_ASSERT_EQUAL_FLOAT(3.5f, out[1]);  // avg(3,4)
+}
+
+void test_downsample_upscale_repeats(void) {
+    // input короче target — каждый выходной слот получает по одному
+    // входному значению (повторы), без дроби.
+    std::vector<float> in{10.0f, 20.0f};
+    auto out = downsample(in, 4);
+    TEST_ASSERT_EQUAL_size_t(4, out.size());
+    TEST_ASSERT_EQUAL_FLOAT(10.0f, out[0]);
+    TEST_ASSERT_EQUAL_FLOAT(10.0f, out[1]);
+    TEST_ASSERT_EQUAL_FLOAT(20.0f, out[2]);
+    TEST_ASSERT_EQUAL_FLOAT(20.0f, out[3]);
+}
+
+void test_downsample_real_24h(void) {
+    // 288 точек → 144: каждый бакет — 2 точки.
+    std::vector<float> in;
+    for (int i = 0; i < 288; i++) in.push_back(static_cast<float>(i));
+    auto out = downsample(in, 144);
+    TEST_ASSERT_EQUAL_size_t(144, out.size());
+    // out[0] = avg(0,1) = 0.5
+    // out[1] = avg(2,3) = 2.5
+    // out[143] = avg(286, 287) = 286.5
+    TEST_ASSERT_EQUAL_FLOAT(0.5f,   out[0]);
+    TEST_ASSERT_EQUAL_FLOAT(2.5f,   out[1]);
+    TEST_ASSERT_EQUAL_FLOAT(286.5f, out[143]);
+}
+
+// ------------------------------------------------------------
 // Этап 6 — навигация: cycle_param, cycle_period
 // ------------------------------------------------------------
 // Раскладка экранов: index = param_idx*3 + period_idx
@@ -223,6 +283,13 @@ int main(int argc, char** argv) {
     RUN_TEST(test_oldest_over_max_returns_min);
     RUN_TEST(test_oldest_unsorted_finds_min);
     RUN_TEST(test_oldest_with_holes);
+
+    RUN_TEST(test_downsample_empty_input);
+    RUN_TEST(test_downsample_target_zero_or_negative);
+    RUN_TEST(test_downsample_passthrough);
+    RUN_TEST(test_downsample_4_to_2_averages);
+    RUN_TEST(test_downsample_upscale_repeats);
+    RUN_TEST(test_downsample_real_24h);
 
     RUN_TEST(test_cycle_param_keeps_period_1h);
     RUN_TEST(test_cycle_param_keeps_period_24h);

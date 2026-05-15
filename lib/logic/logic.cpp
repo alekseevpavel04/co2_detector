@@ -54,6 +54,29 @@ int oldest_file_to_remove(const std::vector<int>& numbers, int max_files) {
 }
 
 // ------------------------------------------------------------
+// Downsampling (Этап 9)
+// ------------------------------------------------------------
+std::vector<float> downsample(const std::vector<float>& input, int target_size) {
+    if (target_size <= 0) return {};
+    std::vector<float> output(static_cast<size_t>(target_size), 0.0f);
+    if (input.empty()) return output;
+
+    const size_t in_n = input.size();
+    for (int i = 0; i < target_size; i++) {
+        size_t start = static_cast<size_t>(i)     * in_n / target_size;
+        size_t end   = static_cast<size_t>(i + 1) * in_n / target_size;
+        if (end == start) end = start + 1;
+        if (end > in_n) end = in_n;
+
+        float sum = 0.0f;
+        size_t count = 0;
+        for (size_t j = start; j < end; j++) { sum += input[j]; count++; }
+        output[i] = (count > 0) ? sum / static_cast<float>(count) : 0.0f;
+    }
+    return output;
+}
+
+// ------------------------------------------------------------
 // Навигация по 9 экранам (Этап 6)
 // ------------------------------------------------------------
 static const int N_PARAMS  = 3;
