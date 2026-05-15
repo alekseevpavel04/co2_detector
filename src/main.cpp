@@ -17,24 +17,22 @@
 #include "logic.h"
 
 // ============================================================
-// Этап 13: Average cache + линия средних на графиках
+// Этап 14: Polish + batterу
 // ============================================================
-// Что нового по сравнению с Этапом 12:
-//   - Структура AverageCache хранит ровно столько точек, сколько
-//     рисуется на графиках (12 / 144 / 168 для 1h / 24h / 7d ×
-//     3 показателя). Размер ~1.6 КБ, сериализуется в
-//     /cache/average_cache.bin.
-//   - Раз в сутки (AVERAGE_RECALC_INTERVAL) recalculate_averages
-//     поднимает 30 дней истории, вызывает calculate_window_average
-//     из логики и обновляет файл кэша. Время измеряется через
-//     накопленный uptime (millis() обнуляется при sleep, но
-//     total_uptime_before_sleep — нет).
-//   - При загрузке кэша проверяем CACHE_VERSION — если структура
-//     изменилась после обновления прошивки, старый кэш игнорируем
-//     до следующего пересчёта.
-//   - На графиках, если кэш has_data, поверх данных рисуется
-//     линия среднего точечным пунктиром (каждый 3-й пиксель).
-//     Управляется флагом SHOW_AVERAGE_LINE.
+// Что доделали:
+//   - VERBOSE_LOGGING управляет шумом в Serial: при 0 остаются
+//     только важные сообщения (ошибки, состояния алерта, размеры
+//     файлов). Для отладки можно временно поднять.
+//   - Убрали технический долг — дубликат TARGET_POINTS_FWD удалён,
+//     forward-declaration оставлена только для функции
+//     load_recent_measurements.
+//
+// Дополнительно к финальному запуску:
+//   - Подключить батарейный бокс (3× AA → 5V, не 3V3!),
+//     отключить USB и замерить автономность (см. ТЗ).
+//   - Интеграционный тест (test/test_logic/test_integration.cpp)
+//     эмулирует месяц данных и прогоняет валидация → averages →
+//     downsampling, проверяя что вся pipeline не падает.
 // Что нового:
 //   - Две кнопки на GPIO 4 («показатель») и GPIO 5 («период»).
 //     Один контакт каждой — на GND, второй — на GPIO. Внутренний
@@ -104,8 +102,22 @@
 
 // --- Управление визуализацией трендов ---
 #define SHOW_IDEAL_LINE      1
-#define SHOW_AVERAGE_LINE    1   // активируется на Этапе 13
+#define SHOW_AVERAGE_LINE    1
 #define SHOW_THRESHOLD_BAD   1
+
+// --- Отладка ---
+// 1 — подробный лог в Serial (запись измерений, ротация, кэш).
+// 0 — только важные сообщения (ошибки, переходы алерта).
+#define VERBOSE_LOGGING      1
+
+// Короткие обёртки для verbose-логов.
+#if VERBOSE_LOGGING
+  #define VLOG(...)   Serial.printf(__VA_ARGS__)
+  #define VLOGLN(s)   Serial.println(s)
+#else
+  #define VLOG(...)   ((void)0)
+  #define VLOGLN(s)   ((void)0)
+#endif
 
 // --- Пороги алерта (гистерезис, см. logic::update_alert_state) ---
 #define ALERT_CO2_ON         1500
@@ -207,7 +219,7 @@ static void init_sensor() {
         print_scd_error("getSerialNumber", err);
         sensor_ok = false;
     } else {
-        Serial.printf("SCD41 OK. SN: 0x%012llx\n", (unsigned long long)sn);
+        VLOG("SCD41 OK. SN: 0x%012llx\n", (unsigned long long)sn);
         sensor_ok = true;
     }
 }
@@ -237,9 +249,9 @@ static void init_filesystem() {
         LittleFS.mkdir("/data");
         Serial.println("Created /data directory");
     }
-    Serial.printf("LittleFS: %u / %u bytes used\n",
-                  (unsigned)LittleFS.usedBytes(),
-                  (unsigned)LittleFS.totalBytes());
+    VLOG("LittleFS: %u / %u bytes used\n",
+         (unsigned)LittleFS.usedBytes(),
+         (unsigned)LittleFS.totalBytes());
 }
 
 // Сканируем /data/, возвращаем номера всех файлов measurements_NNN.bin
@@ -279,7 +291,7 @@ static String get_current_file_path() {
     std::string path = make_filename(n);
     std::strncpy(cached_file_path, path.c_str(), sizeof(cached_file_path) - 1);
     cached_file_path[sizeof(cached_file_path) - 1] = '\0';
-    Serial.printf("Current file resolved: %s\n", cached_file_path);
+    VLOG("Current file resolved: %s\n", cached_file_path);
     return String(cached_file_path);
 }
 
@@ -337,13 +349,15 @@ static std::vector<Measurement> read_last_n_from_file(const String& path, int n)
     return result;
 }
 
+// Forward decls — реальные определения дальше в файле.
+static std::vector<Measurement> load_recent_measurements(int n);
+
+// Точки на графике для каждого периода: 12 / 144 / 168.
+static const int TARGET_POINTS[3] = { 12, 144, 168 };
+
 // ------------------------------------------------------------
 // Average cache: загрузка / сохранение / пересчёт (Этап 13)
 // ------------------------------------------------------------
-
-// Forward decls — реальные определения дальше в файле.
-static std::vector<Measurement> load_recent_measurements(int n);
-static const int TARGET_POINTS_FWD[3] = { 12, 144, 168 };
 
 static bool load_average_cache() {
     if (!fs_ok) return false;
@@ -365,7 +379,7 @@ static bool load_average_cache() {
         g_cache = AverageCache{};
         return false;
     }
-    Serial.printf("Loaded average cache (has_data=%u)\n", g_cache.has_data);
+    VLOG("Loaded average cache (has_data=%u)\n", g_cache.has_data);
     return true;
 }
 
@@ -379,7 +393,7 @@ static bool save_average_cache() {
     }
     size_t w = f.write(reinterpret_cast<const uint8_t*>(&g_cache), sizeof(g_cache));
     f.close();
-    Serial.printf("Saved cache: %u bytes\n", (unsigned)w);
+    VLOG("Saved cache: %u bytes\n", (unsigned)w);
     return w == sizeof(g_cache);
 }
 
@@ -438,7 +452,7 @@ static void recalculate_averages() {
 // готовый к отрисовке. Если кэш пуст — пустой vector.
 static std::vector<float> get_average_for_screen(int param_idx, int period_idx) {
     if (!g_cache.has_data) return {};
-    int target = TARGET_POINTS_FWD[period_idx];
+    int target = TARGET_POINTS[period_idx];
     std::vector<float> result(target, 0.0f);
 
     if (param_idx == 0) {
@@ -489,8 +503,8 @@ static bool save_measurement(const Measurement& m) {
         return false;
     }
     int records = static_cast<int>(fsize / sizeof(Measurement));
-    Serial.printf("Saved to %s: +%u B, total %u B (%d records)\n",
-                  path.c_str(), (unsigned)written, (unsigned)fsize, records);
+    VLOG("Saved to %s: +%u B, total %u B (%d records)\n",
+         path.c_str(), (unsigned)written, (unsigned)fsize, records);
 
     // Ротация если файл достиг лимита.
     if (fsize >= MAX_FILE_SIZE) {
@@ -566,9 +580,8 @@ static ParamLines param_lines(int param_idx) {
 }
 
 // Сколько raw-измерений нужно для каждого периода (при шаге 5 мин).
-// Целевые размеры — сколько точек реально рисуем на графике.
-static const int RECORDS_FOR_PERIOD[3]  = { 12, 288, 2016 };
-static const int TARGET_POINTS[3]        = { 12, 144, 168  };
+static const int RECORDS_FOR_PERIOD[3] = { 12, 288, 2016 };
+// TARGET_POINTS объявлено выше (нужно cache-функциям тоже).
 
 struct Scale { int lo; int hi; };
 
@@ -993,7 +1006,7 @@ void setup() {
             float t = 0.0f, h = 0.0f;
             if (take_measurement(co2, t, h)) {
                 last_co2 = co2; last_t = t; last_h = h; last_valid = true;
-                Serial.printf("CO2: %u ppm, T: %.1f C, H: %.0f %%\n", co2, t, h);
+                Serial.printf("CO2: %u ppm, T: %.1f C, H: %.0f%%\n", co2, t, h);
 
                 // Обновляем алерт с гистерезисом (Этап 12).
                 bool prev_alert = alert_active;

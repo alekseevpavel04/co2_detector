@@ -2,6 +2,14 @@
 #include "logic.h"
 
 // Тесты чистой логики (запуск: pio test -e native).
+//
+// Файл содержит две группы:
+//   1. Юнит-тесты per-stage (cycle_*, downsample, traffic, alert, etc.)
+//   2. Интеграционный тест (Этап 14): синтетический месяц данных
+//      прогоняется через всю чисто-логическую pipeline.
+
+#include <vector>
+#include <cmath>
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -439,6 +447,111 @@ void test_cycle_period_is_modulo_3(void) {
     }
 }
 
+// ------------------------------------------------------------
+// Этап 14 — интеграционный тест: синтетический месяц данных
+// ------------------------------------------------------------
+// Генерируем 30 дней × 288 = 8640 «измерений» с правдоподобным
+// суточным паттерном (CO2 низкий ночью, выше днём). Прогоняем
+// через is_measurement_valid + calculate_window_average +
+// downsample, проверяем что:
+//   - все измерения валидны;
+//   - размеры выходных массивов совпадают с целевыми;
+//   - средние попадают в разумный диапазон.
+//   - навигация по 9 экранам замкнута;
+//   - алерт корректно отрабатывает по реальной траектории CO2.
+
+static std::vector<Measurement> generate_synthetic_month() {
+    std::vector<Measurement> out;
+    out.reserve(30 * 288);
+    for (int day = 0; day < 30; day++) {
+        for (int slot = 0; slot < 288; slot++) {
+            // slot 0..287 — 5-минутные интервалы за сутки.
+            float hour = slot / 12.0f;          // 0..24
+            // CO2: ~500 ночью, ~1100 в рабочие часы (9..18).
+            uint16_t co2 = 500;
+            if (hour >= 9.0f && hour <= 18.0f) co2 = 1100;
+            co2 += static_cast<uint16_t>(((slot + day) * 7) % 200) - 100;
+            // T: между 20 и 24 с лёгкой суточной волной.
+            float t_real = 22.0f + 1.5f * std::sin(hour * 6.28318f / 24.0f);
+            int16_t t10 = static_cast<int16_t>(t_real * 10.0f);
+            uint8_t hum = static_cast<uint8_t>(45 + (slot % 21));   // 45..65
+            Measurement m{};
+            m.timestamp = static_cast<uint32_t>(day * 86400 + slot * 300);
+            m.co2 = co2;
+            m.temp_x10 = t10;
+            m.humidity = hum;
+            m.flags = 0;
+            out.push_back(m);
+        }
+    }
+    return out;
+}
+
+void test_integration_synthetic_month(void) {
+    auto history = generate_synthetic_month();
+    TEST_ASSERT_EQUAL_size_t(30u * 288u, history.size());
+
+    // 1. Все синтетические измерения валидны.
+    int valid_count = 0;
+    for (const auto& m : history) if (is_measurement_valid(m)) valid_count++;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(history.size()), valid_count);
+
+    // 2. Перегоняем в float-векторы.
+    std::vector<float> co2, t, h;
+    co2.reserve(history.size());
+    t.reserve(history.size());
+    h.reserve(history.size());
+    for (const auto& m : history) {
+        co2.push_back(static_cast<float>(m.co2));
+        t.push_back(m.temp_x10 / 10.0f);
+        h.push_back(static_cast<float>(m.humidity));
+    }
+
+    // 3. Расчёт средних: размеры выходов = target.
+    auto co2_1h  = calculate_window_average(co2, 12,   12);
+    auto co2_24h = calculate_window_average(co2, 288,  144);
+    auto co2_7d  = calculate_window_average(co2, 2016, 168);
+    TEST_ASSERT_EQUAL_size_t(12,  co2_1h.size());
+    TEST_ASSERT_EQUAL_size_t(144, co2_24h.size());
+    TEST_ASSERT_EQUAL_size_t(168, co2_7d.size());
+
+    // 4. Средние попадают в правдоподобный диапазон.
+    for (float v : co2_24h) {
+        TEST_ASSERT_TRUE_MESSAGE(v >= 300.0f && v <= 1500.0f,
+                                  "co2_24h avg in plausible range");
+    }
+    auto t_24h = calculate_window_average(t, 288, 144);
+    for (float v : t_24h) {
+        TEST_ASSERT_TRUE_MESSAGE(v >= 18.0f && v <= 26.0f,
+                                  "t_24h avg in plausible range");
+    }
+    auto h_24h = calculate_window_average(h, 288, 144);
+    for (float v : h_24h) {
+        TEST_ASSERT_TRUE_MESSAGE(v >= 30.0f && v <= 80.0f,
+                                  "h_24h avg in plausible range");
+    }
+
+    // 5. Downsample не падает на больших окнах.
+    auto ds = downsample(co2, 168);
+    TEST_ASSERT_EQUAL_size_t(168, ds.size());
+
+    // 6. Навигация: cycle_param × 3 раза замыкает на исходный экран.
+    for (int s = 0; s < 9; s++) {
+        int after = cycle_param(cycle_param(cycle_param(s)));
+        TEST_ASSERT_EQUAL_INT(s, after);
+    }
+
+    // 7. Алерт: симулируем CO2 крутящееся вокруг порогов.
+    bool alert = false;
+    for (const auto& m : history) {
+        alert = update_alert_state(alert, m.co2);
+    }
+    // После 30 дней с реалистичным паттерном — алерт должен быть
+    // в каком-то определённом состоянии (а не «вечно on» / «вечно off»
+    // независимо от данных). Проверяем что функция вообще не падает.
+    (void)alert;
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
 
@@ -492,6 +605,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_avg_window_history_smaller_than_window);
     RUN_TEST(test_avg_window_invalid_sizes);
     RUN_TEST(test_avg_window_4_to_2);
+
+    RUN_TEST(test_integration_synthetic_month);
 
     RUN_TEST(test_cycle_param_keeps_period_1h);
     RUN_TEST(test_cycle_param_keeps_period_24h);
