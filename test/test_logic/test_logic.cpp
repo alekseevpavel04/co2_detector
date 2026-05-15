@@ -245,6 +245,59 @@ void test_humidity_traffic_bad(void) {
 }
 
 // ------------------------------------------------------------
+// Этап 12 — алерт VENTILATE с гистерезисом
+// ------------------------------------------------------------
+void test_alert_off_stays_off_below_threshold(void) {
+    // Низкий CO2, алерт уже off → остаётся off.
+    TEST_ASSERT_FALSE(update_alert_state(false, 400));
+    TEST_ASSERT_FALSE(update_alert_state(false, 1000));
+    TEST_ASSERT_FALSE(update_alert_state(false, 1499));
+    TEST_ASSERT_FALSE(update_alert_state(false, 1500));  // на границе ещё off
+}
+
+void test_alert_off_turns_on_above_1500(void) {
+    TEST_ASSERT_TRUE(update_alert_state(false, 1501));
+    TEST_ASSERT_TRUE(update_alert_state(false, 2000));
+    TEST_ASSERT_TRUE(update_alert_state(false, 5000));
+}
+
+void test_alert_on_stays_on_above_1300(void) {
+    // Уже on, CO2 ещё выше 1300 → остаёмся on (гистерезис).
+    TEST_ASSERT_TRUE(update_alert_state(true, 5000));
+    TEST_ASSERT_TRUE(update_alert_state(true, 1500));
+    TEST_ASSERT_TRUE(update_alert_state(true, 1400));
+    TEST_ASSERT_TRUE(update_alert_state(true, 1300));
+}
+
+void test_alert_on_turns_off_below_1300(void) {
+    TEST_ASSERT_FALSE(update_alert_state(true, 1299));
+    TEST_ASSERT_FALSE(update_alert_state(true, 1000));
+    TEST_ASSERT_FALSE(update_alert_state(true, 400));
+}
+
+void test_alert_hysteresis_zone(void) {
+    // CO2 в зоне 1300..1500 — состояние не меняется.
+    for (int co2 = 1300; co2 <= 1500; co2 += 50) {
+        TEST_ASSERT_FALSE(update_alert_state(false, co2));
+        TEST_ASSERT_TRUE (update_alert_state(true,  co2));
+    }
+}
+
+void test_alert_simulated_cycle(void) {
+    // Эмулируем: CO2 растёт до 1600 (включается), падает до 1200 (выключается).
+    bool active = false;
+    int co2_trajectory[] = { 600, 800, 1200, 1400, 1499, 1501, 1600, 1500,
+                              1400, 1350, 1300, 1299, 800, 500 };
+    bool expected[]       = { false, false, false, false, false, true, true, true,
+                              true, true, true, false, false, false };
+    int n = sizeof(co2_trajectory) / sizeof(co2_trajectory[0]);
+    for (int i = 0; i < n; i++) {
+        active = update_alert_state(active, co2_trajectory[i]);
+        TEST_ASSERT_EQUAL_MESSAGE(expected[i], active, "alert trajectory step");
+    }
+}
+
+// ------------------------------------------------------------
 // Этап 6 — навигация: cycle_param, cycle_period
 // ------------------------------------------------------------
 // Раскладка экранов: index = param_idx*3 + period_idx
@@ -354,6 +407,13 @@ int main(int argc, char** argv) {
     RUN_TEST(test_humidity_traffic_good);
     RUN_TEST(test_humidity_traffic_ok);
     RUN_TEST(test_humidity_traffic_bad);
+
+    RUN_TEST(test_alert_off_stays_off_below_threshold);
+    RUN_TEST(test_alert_off_turns_on_above_1500);
+    RUN_TEST(test_alert_on_stays_on_above_1300);
+    RUN_TEST(test_alert_on_turns_off_below_1300);
+    RUN_TEST(test_alert_hysteresis_zone);
+    RUN_TEST(test_alert_simulated_cycle);
 
     RUN_TEST(test_cycle_param_keeps_period_1h);
     RUN_TEST(test_cycle_param_keeps_period_24h);

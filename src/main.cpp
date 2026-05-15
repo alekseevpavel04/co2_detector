@@ -17,20 +17,19 @@
 #include "logic.h"
 
 // ============================================================
-// Этап 11: Header со светофорами + линии трендов
+// Этап 12: Алерт VENTILATE с гистерезисом
 // ============================================================
-// Что нового по сравнению с Этапом 10:
-//   - Header (y 0..15): три значения CO2/T/H слева и три светофора
-//     справа. Светофор — 3 точки диаметром 4 px:
-//       ●●● хорошо   ●●○ терпимо   ●○○ плохо
-//     Если значений ещё нет — пустые точки ○○○.
-//   - На графиках накладываем линии трендов:
-//       сплошная 1 px — идеальное значение (CO2 600, T 22, RH 50);
-//       пунктир       — пороги «плохо» (CO2 1500; T 18 и 26;
-//                                        RH 30 и 70).
-//     Управляется флагами SHOW_IDEAL_LINE и SHOW_THRESHOLD_BAD.
-//   - Удалили дубль текущего значения в правом верхнем углу —
-//     теперь это часть header'а.
+// Что нового по сравнению с Этапом 11:
+//   - update_alert_state из lib/logic применяется к каждому
+//     успешному замеру. on/off-пороги: 1500 / 1300. Состояние
+//     хранится в RTC memory (переживает sleep), при reset
+//     инициализируется в false.
+//   - Алерт показывается на ВСЕХ 9 экранах в полосе y 106..121
+//     текстом "VENTILATE" жирным шрифтом по центру. Если алерт
+//     не активен — полоса остаётся пустой.
+//   - X-метки графика переехали на встроенный шрифт 5×7 px
+//     (display.setFont() без аргумента), чтобы освободить место
+//     под алерт (y 96..105 теперь хватает на компактные метки).
 // Что нового:
 //   - Две кнопки на GPIO 4 («показатель») и GPIO 5 («период»).
 //     Один контакт каждой — на GND, второй — на GPIO. Внутренний
@@ -102,6 +101,13 @@
 #define SHOW_AVERAGE_LINE    1   // активируется на Этапе 13
 #define SHOW_THRESHOLD_BAD   1
 
+// --- Пороги алерта (гистерезис, см. logic::update_alert_state) ---
+#define ALERT_CO2_ON         1500
+#define ALERT_CO2_OFF        1300
+
+// --- UI ---
+#define UI_ALERT_TEXT        "VENTILATE"
+
 // --- Геометрия экрана (после setRotation(1) — 250×122) ---
 #define SCREEN_W       250
 #define SCREEN_H       122
@@ -125,6 +131,7 @@ RTC_DATA_ATTR bool     last_valid = false;
 RTC_DATA_ATTR uint16_t last_co2  = 0;
 RTC_DATA_ATTR float    last_t    = 0.0f;
 RTC_DATA_ATTR float    last_h    = 0.0f;
+RTC_DATA_ATTR bool     alert_active = false;
 RTC_DATA_ATTR char     cached_file_path[64] = "";
 
 bool sensor_ok = false;
@@ -575,15 +582,30 @@ static void draw_y_labels(int lo, int hi) {
 }
 
 static void draw_x_labels(int period_idx) {
-    display.setFont(&FreeSans9pt7b);
-    int y = GRAPH_BOTTOM + 12;
+    // Встроенный шрифт 5×7 px: cursor задаёт ВЕРХ текста (не baseline).
+    // Освобождаем y 106+ под алерт.
+    display.setFont();
+    int y = GRAPH_BOTTOM + 1;          // y 97 (text занимает 97..104)
     const char* left =
         (period_idx == 0) ? "-1h" :
         (period_idx == 1) ? "-24h" : "-7d";
     display.setCursor(GRAPH_X, y);
     display.print(left);
-    display.setCursor(GRAPH_X + GRAPH_W - 22, y);
+    display.setCursor(GRAPH_X + GRAPH_W - 20, y);
     display.print("now");
+}
+
+// Алерт «VENTILATE» в полосе y 106..121, по центру, жирный 12pt.
+// Показывается на ВСЕХ 9 экранах когда alert_active == true.
+static void draw_alert_if_needed() {
+    if (!alert_active) return;
+    display.setFont(&FreeSansBold12pt7b);
+    int16_t x1, y1; uint16_t w, h;
+    display.getTextBounds(UI_ALERT_TEXT, 0, 0, &x1, &y1, &w, &h);
+    int x = (SCREEN_W - static_cast<int>(w)) / 2;
+    int y = 119;   // baseline вблизи нижнего края
+    display.setCursor(x, y);
+    display.print(UI_ALERT_TEXT);
 }
 
 // Главная функция — рисует один из 9 экранов.
@@ -652,6 +674,8 @@ static void draw_screen(int screen, bool valid,
         display.drawRect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H, GxEPD_BLACK);
         draw_y_labels(s.lo, s.hi);
         draw_x_labels(period_idx);
+
+        draw_alert_if_needed();
     } while (display.nextPage());
     display.hibernate();
 }
@@ -725,6 +749,7 @@ void setup() {
         current_screen = 0;
         last_valid = false;
         last_co2 = 0; last_t = 0.0f; last_h = 0.0f;
+        alert_active = false;
         cached_file_path[0] = '\0';
         Serial.println("First boot — RTC initialized");
     }
@@ -782,6 +807,15 @@ void setup() {
             if (take_measurement(co2, t, h)) {
                 last_co2 = co2; last_t = t; last_h = h; last_valid = true;
                 Serial.printf("CO2: %u ppm, T: %.1f C, H: %.0f %%\n", co2, t, h);
+
+                // Обновляем алерт с гистерезисом (Этап 12).
+                bool prev_alert = alert_active;
+                alert_active = update_alert_state(alert_active, co2);
+                if (alert_active != prev_alert) {
+                    Serial.printf("ALERT state changed: %s -> %s\n",
+                                  prev_alert    ? "ON" : "OFF",
+                                  alert_active  ? "ON" : "OFF");
+                }
 
                 // Сохраняем в LittleFS (Этап 7).
                 Measurement rec{};
