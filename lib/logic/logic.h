@@ -64,6 +64,27 @@ int oldest_file_to_remove(const std::vector<int>& numbers, int max_files);
 std::vector<float> downsample(const std::vector<float>& input, int target_size);
 
 // ------------------------------------------------------------
+// Расчёт средних значений (Этап 13)
+// ------------------------------------------------------------
+// Идея: разбиваем history на окна по real_window и считаем
+// «среднее значение в момент i» — усредняя по позиции i внутри
+// каждого окна. На выходе target_size значений, по одному на
+// позицию во временном окне.
+//
+//   real_window = 12   target = 12   — окно «1 час», 12 точек
+//   real_window = 288  target = 144  — окно «24 часа», 144 точки
+//   real_window = 2016 target = 168  — окно «7 дней», 168 точек
+//
+// Edge cases:
+//   - history пустой               → возвращаем target_size нулей.
+//   - history короче real_window   → нет ни одного полного окна,
+//                                    возвращаем target_size нулей.
+//   - real_window/target <= 0      → возвращаем пустой vector.
+std::vector<float> calculate_window_average(
+        const std::vector<float>& history,
+        int real_window, int target_size);
+
+// ------------------------------------------------------------
 // Алерт VENTILATE с гистерезисом (Этап 12)
 // ------------------------------------------------------------
 // Возвращает новое состояние алерта:

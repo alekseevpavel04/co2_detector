@@ -54,6 +54,38 @@ int oldest_file_to_remove(const std::vector<int>& numbers, int max_files) {
 }
 
 // ------------------------------------------------------------
+// Расчёт средних значений (Этап 13)
+// ------------------------------------------------------------
+std::vector<float> calculate_window_average(
+        const std::vector<float>& history,
+        int real_window, int target_size) {
+    if (real_window <= 0 || target_size <= 0) return {};
+    std::vector<float> result(static_cast<size_t>(target_size), 0.0f);
+    if (history.empty()) return result;
+
+    const int history_size = static_cast<int>(history.size());
+    const int n_windows = history_size / real_window;
+    if (n_windows == 0) return result;   // меньше одного полного окна
+
+    for (int i = 0; i < target_size; i++) {
+        float sum = 0.0f;
+        int   count = 0;
+        for (int j = 0; j < n_windows; j++) {
+            int real_start = j * real_window + (i * real_window) / target_size;
+            int real_end   = j * real_window + ((i + 1) * real_window) / target_size;
+            if (real_end == real_start) real_end = real_start + 1;
+            if (real_end > history_size) real_end = history_size;
+            for (int k = real_start; k < real_end; k++) {
+                sum += history[k];
+                count++;
+            }
+        }
+        result[i] = (count > 0) ? sum / static_cast<float>(count) : 0.0f;
+    }
+    return result;
+}
+
+// ------------------------------------------------------------
 // Алерт VENTILATE с гистерезисом (Этап 12)
 // ------------------------------------------------------------
 bool update_alert_state(bool current, int co2) {

@@ -17,19 +17,24 @@
 #include "logic.h"
 
 // ============================================================
-// Этап 12: Алерт VENTILATE с гистерезисом
+// Этап 13: Average cache + линия средних на графиках
 // ============================================================
-// Что нового по сравнению с Этапом 11:
-//   - update_alert_state из lib/logic применяется к каждому
-//     успешному замеру. on/off-пороги: 1500 / 1300. Состояние
-//     хранится в RTC memory (переживает sleep), при reset
-//     инициализируется в false.
-//   - Алерт показывается на ВСЕХ 9 экранах в полосе y 106..121
-//     текстом "VENTILATE" жирным шрифтом по центру. Если алерт
-//     не активен — полоса остаётся пустой.
-//   - X-метки графика переехали на встроенный шрифт 5×7 px
-//     (display.setFont() без аргумента), чтобы освободить место
-//     под алерт (y 96..105 теперь хватает на компактные метки).
+// Что нового по сравнению с Этапом 12:
+//   - Структура AverageCache хранит ровно столько точек, сколько
+//     рисуется на графиках (12 / 144 / 168 для 1h / 24h / 7d ×
+//     3 показателя). Размер ~1.6 КБ, сериализуется в
+//     /cache/average_cache.bin.
+//   - Раз в сутки (AVERAGE_RECALC_INTERVAL) recalculate_averages
+//     поднимает 30 дней истории, вызывает calculate_window_average
+//     из логики и обновляет файл кэша. Время измеряется через
+//     накопленный uptime (millis() обнуляется при sleep, но
+//     total_uptime_before_sleep — нет).
+//   - При загрузке кэша проверяем CACHE_VERSION — если структура
+//     изменилась после обновления прошивки, старый кэш игнорируем
+//     до следующего пересчёта.
+//   - На графиках, если кэш has_data, поверх данных рисуется
+//     линия среднего точечным пунктиром (каждый 3-й пиксель).
+//     Управляется флагом SHOW_AVERAGE_LINE.
 // Что нового:
 //   - Две кнопки на GPIO 4 («показатель») и GPIO 5 («период»).
 //     Один контакт каждой — на GND, второй — на GPIO. Внутренний
@@ -62,9 +67,10 @@
 #define LED_LEVEL          32
 
 // --- Интервалы ---
-#define MEASUREMENT_DELAY_MS   5000
-#define MEASUREMENT_INTERVAL   300        // sleep между замерами, сек
-#define BUTTON_RELEASE_TIMEOUT 3000       // мс — сколько ждём отпускания
+#define MEASUREMENT_DELAY_MS    5000
+#define MEASUREMENT_INTERVAL    300        // sleep между замерами, сек
+#define AVERAGE_RECALC_INTERVAL 86400      // пересчёт средних раз в сутки
+#define BUTTON_RELEASE_TIMEOUT  3000       // мс — сколько ждём отпускания
 
 // --- Драйвер e-Paper ---
 #define EPD_DRIVER     GxEPD2_213_B73
@@ -108,6 +114,17 @@
 // --- UI ---
 #define UI_ALERT_TEXT        "VENTILATE"
 
+// --- Average cache (Этап 13) ---
+#define CACHE_VERSION        1
+#define CACHE_PATH           "/cache/average_cache.bin"
+#define CACHE_HISTORY_DAYS   30      // сколько дней истории берём для пересчёта
+#define AVG_POINTS_1H        12
+#define AVG_POINTS_24H       144
+#define AVG_POINTS_7D        168
+#define AVG_WINDOW_1H        12      // raw measurement за 1 час
+#define AVG_WINDOW_24H       288     // raw за 24 часа
+#define AVG_WINDOW_7D        2016    // raw за 7 дней
+
 // --- Геометрия экрана (после setRotation(1) — 250×122) ---
 #define SCREEN_W       250
 #define SCREEN_H       122
@@ -132,7 +149,27 @@ RTC_DATA_ATTR uint16_t last_co2  = 0;
 RTC_DATA_ATTR float    last_t    = 0.0f;
 RTC_DATA_ATTR float    last_h    = 0.0f;
 RTC_DATA_ATTR bool     alert_active = false;
+RTC_DATA_ATTR uint32_t last_average_recalc_uptime = 0;
 RTC_DATA_ATTR char     cached_file_path[64] = "";
+
+// AverageCache: точное хранилище уже отрисовываемых точек.
+// uint16 для CO2 (ppm), int16 для T*10 (десятые градуса),
+// uint8 для % влажности. Размер ~1.6 КБ.
+struct __attribute__((packed)) AverageCache {
+    uint32_t version;
+    uint8_t  has_data;
+    uint8_t  reserved[3];
+    uint16_t avg_co2_1h [AVG_POINTS_1H];
+    uint16_t avg_co2_24h[AVG_POINTS_24H];
+    uint16_t avg_co2_7d [AVG_POINTS_7D];
+    int16_t  avg_temp_1h [AVG_POINTS_1H];
+    int16_t  avg_temp_24h[AVG_POINTS_24H];
+    int16_t  avg_temp_7d [AVG_POINTS_7D];
+    uint8_t  avg_humidity_1h [AVG_POINTS_1H];
+    uint8_t  avg_humidity_24h[AVG_POINTS_24H];
+    uint8_t  avg_humidity_7d [AVG_POINTS_7D];
+};
+static AverageCache g_cache{};   // сессионная переменная (не RTC)
 
 bool sensor_ok = false;
 bool fs_ok     = false;
@@ -297,6 +334,129 @@ static std::vector<Measurement> read_last_n_from_file(const String& path, int n)
         if (is_measurement_valid(m)) result.push_back(m);
     }
     f.close();
+    return result;
+}
+
+// ------------------------------------------------------------
+// Average cache: загрузка / сохранение / пересчёт (Этап 13)
+// ------------------------------------------------------------
+
+// Forward decls — реальные определения дальше в файле.
+static std::vector<Measurement> load_recent_measurements(int n);
+static const int TARGET_POINTS_FWD[3] = { 12, 144, 168 };
+
+static bool load_average_cache() {
+    if (!fs_ok) return false;
+    if (!LittleFS.exists(CACHE_PATH)) return false;
+    File f = LittleFS.open(CACHE_PATH, "r");
+    if (!f) return false;
+    if (f.size() != sizeof(AverageCache)) {
+        Serial.printf("Cache size mismatch (%u vs %u), ignoring\n",
+                      (unsigned)f.size(), (unsigned)sizeof(AverageCache));
+        f.close();
+        return false;
+    }
+    size_t got = f.read(reinterpret_cast<uint8_t*>(&g_cache), sizeof(g_cache));
+    f.close();
+    if (got != sizeof(g_cache)) return false;
+    if (g_cache.version != CACHE_VERSION) {
+        Serial.printf("Cache version mismatch (%u vs %u), ignoring\n",
+                      g_cache.version, CACHE_VERSION);
+        g_cache = AverageCache{};
+        return false;
+    }
+    Serial.printf("Loaded average cache (has_data=%u)\n", g_cache.has_data);
+    return true;
+}
+
+static bool save_average_cache() {
+    if (!fs_ok) return false;
+    if (!LittleFS.exists("/cache")) LittleFS.mkdir("/cache");
+    File f = LittleFS.open(CACHE_PATH, "w", /*create=*/true);
+    if (!f) {
+        Serial.println("save_average_cache: open failed");
+        return false;
+    }
+    size_t w = f.write(reinterpret_cast<const uint8_t*>(&g_cache), sizeof(g_cache));
+    f.close();
+    Serial.printf("Saved cache: %u bytes\n", (unsigned)w);
+    return w == sizeof(g_cache);
+}
+
+static void recalculate_averages() {
+    if (!fs_ok) return;
+
+    Serial.println("Recalculating averages...");
+    uint32_t t0 = millis();
+
+    // 30 дней истории = 30 × 288 = 8640 записей при 5-мин интервале.
+    auto history = load_recent_measurements(CACHE_HISTORY_DAYS * 288);
+    if (history.empty()) {
+        Serial.println("No history yet, skipping recalc");
+        return;
+    }
+    Serial.printf("Loaded %u records in %u ms\n",
+                  (unsigned)history.size(), (unsigned)(millis() - t0));
+
+    std::vector<float> co2_h, t_h, h_h;
+    co2_h.reserve(history.size());
+    t_h.reserve(history.size());
+    h_h.reserve(history.size());
+    for (const auto& m : history) {
+        co2_h.push_back(static_cast<float>(m.co2));
+        t_h.push_back(m.temp_x10 / 10.0f);
+        h_h.push_back(static_cast<float>(m.humidity));
+    }
+
+    auto co2_1h  = calculate_window_average(co2_h, AVG_WINDOW_1H,  AVG_POINTS_1H);
+    auto co2_24h = calculate_window_average(co2_h, AVG_WINDOW_24H, AVG_POINTS_24H);
+    auto co2_7d  = calculate_window_average(co2_h, AVG_WINDOW_7D,  AVG_POINTS_7D);
+    auto t_1h    = calculate_window_average(t_h,   AVG_WINDOW_1H,  AVG_POINTS_1H);
+    auto t_24h   = calculate_window_average(t_h,   AVG_WINDOW_24H, AVG_POINTS_24H);
+    auto t_7d    = calculate_window_average(t_h,   AVG_WINDOW_7D,  AVG_POINTS_7D);
+    auto h_1h    = calculate_window_average(h_h,   AVG_WINDOW_1H,  AVG_POINTS_1H);
+    auto h_24h   = calculate_window_average(h_h,   AVG_WINDOW_24H, AVG_POINTS_24H);
+    auto h_7d    = calculate_window_average(h_h,   AVG_WINDOW_7D,  AVG_POINTS_7D);
+
+    g_cache.version  = CACHE_VERSION;
+    g_cache.has_data = 1;
+    for (int i = 0; i < AVG_POINTS_1H;  i++) g_cache.avg_co2_1h [i] = static_cast<uint16_t>(co2_1h[i]);
+    for (int i = 0; i < AVG_POINTS_24H; i++) g_cache.avg_co2_24h[i] = static_cast<uint16_t>(co2_24h[i]);
+    for (int i = 0; i < AVG_POINTS_7D;  i++) g_cache.avg_co2_7d [i] = static_cast<uint16_t>(co2_7d[i]);
+    for (int i = 0; i < AVG_POINTS_1H;  i++) g_cache.avg_temp_1h [i] = static_cast<int16_t>(t_1h[i] * 10.0f);
+    for (int i = 0; i < AVG_POINTS_24H; i++) g_cache.avg_temp_24h[i] = static_cast<int16_t>(t_24h[i] * 10.0f);
+    for (int i = 0; i < AVG_POINTS_7D;  i++) g_cache.avg_temp_7d [i] = static_cast<int16_t>(t_7d[i] * 10.0f);
+    for (int i = 0; i < AVG_POINTS_1H;  i++) g_cache.avg_humidity_1h [i] = static_cast<uint8_t>(h_1h[i]);
+    for (int i = 0; i < AVG_POINTS_24H; i++) g_cache.avg_humidity_24h[i] = static_cast<uint8_t>(h_24h[i]);
+    for (int i = 0; i < AVG_POINTS_7D;  i++) g_cache.avg_humidity_7d [i] = static_cast<uint8_t>(h_7d[i]);
+
+    save_average_cache();
+    Serial.printf("Average recalc done in %u ms total\n", (unsigned)(millis() - t0));
+}
+
+// Возвращает массив средних для текущего (param, period) экрана,
+// готовый к отрисовке. Если кэш пуст — пустой vector.
+static std::vector<float> get_average_for_screen(int param_idx, int period_idx) {
+    if (!g_cache.has_data) return {};
+    int target = TARGET_POINTS_FWD[period_idx];
+    std::vector<float> result(target, 0.0f);
+
+    if (param_idx == 0) {
+        const uint16_t* src = (period_idx == 0) ? g_cache.avg_co2_1h :
+                              (period_idx == 1) ? g_cache.avg_co2_24h :
+                                                  g_cache.avg_co2_7d;
+        for (int i = 0; i < target; i++) result[i] = static_cast<float>(src[i]);
+    } else if (param_idx == 1) {
+        const int16_t* src = (period_idx == 0) ? g_cache.avg_temp_1h :
+                             (period_idx == 1) ? g_cache.avg_temp_24h :
+                                                 g_cache.avg_temp_7d;
+        for (int i = 0; i < target; i++) result[i] = src[i] / 10.0f;
+    } else {
+        const uint8_t* src = (period_idx == 0) ? g_cache.avg_humidity_1h :
+                             (period_idx == 1) ? g_cache.avg_humidity_24h :
+                                                 g_cache.avg_humidity_7d;
+        for (int i = 0; i < target; i++) result[i] = static_cast<float>(src[i]);
+    }
     return result;
 }
 
@@ -502,6 +662,21 @@ static void draw_area(const std::vector<float>& values, int lo, int hi) {
     }
 }
 
+// Точечный пунктир для линии средних: каждый 3-й пиксель.
+static void draw_dotted_line(const std::vector<float>& values, int lo, int hi) {
+    if (hi <= lo) return;
+    int items = std::min(static_cast<int>(values.size()), GRAPH_W);
+    if (items < 2) return;
+    int data_start = static_cast<int>(values.size()) - items;
+    int x0 = GRAPH_X + GRAPH_W - items;
+
+    for (int i = 0; i < items; i += 3) {
+        int y = value_to_y(values[data_start + i], lo, hi);
+        int x = x0 + i;
+        display.drawPixel(x, y, GxEPD_BLACK);
+    }
+}
+
 // Линейный график: соединяем последовательные точки.
 static void draw_line(const std::vector<float>& values, int lo, int hi) {
     if (hi <= lo) return;
@@ -671,6 +846,16 @@ static void draw_screen(int screen, bool valid,
         }
         #endif
 
+        // Линия среднего из кэша (Этап 13) — точечный пунктир.
+        #if SHOW_AVERAGE_LINE
+        if (g_cache.has_data) {
+            auto avg = get_average_for_screen(param_idx, period_idx);
+            if (!avg.empty()) {
+                draw_dotted_line(avg, s.lo, s.hi);
+            }
+        }
+        #endif
+
         display.drawRect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H, GxEPD_BLACK);
         draw_y_labels(s.lo, s.hi);
         draw_x_labels(period_idx);
@@ -750,6 +935,7 @@ void setup() {
         last_valid = false;
         last_co2 = 0; last_t = 0.0f; last_h = 0.0f;
         alert_active = false;
+        last_average_recalc_uptime = 0;
         cached_file_path[0] = '\0';
         Serial.println("First boot — RTC initialized");
     }
@@ -771,6 +957,7 @@ void setup() {
 
     init_display();
     init_filesystem();
+    load_average_cache();   // если файла нет — g_cache остаётся нулевым
 
     if (from_button) {
         // Кнопка: меняем экран, без измерения.
@@ -819,12 +1006,19 @@ void setup() {
 
                 // Сохраняем в LittleFS (Этап 7).
                 Measurement rec{};
-                rec.timestamp = total_uptime_before_sleep + millis() / 1000;
+                uint32_t now_uptime = total_uptime_before_sleep + millis() / 1000;
+                rec.timestamp = now_uptime;
                 rec.co2       = co2;
                 rec.temp_x10  = static_cast<int16_t>(t * 10.0f);
                 rec.humidity  = static_cast<uint8_t>(h + 0.5f);
                 rec.flags     = 0;
                 save_measurement(rec);
+
+                // Пересчёт средних — раз в сутки (Этап 13).
+                if (now_uptime - last_average_recalc_uptime >= AVERAGE_RECALC_INTERVAL) {
+                    recalculate_averages();
+                    last_average_recalc_uptime = now_uptime;
+                }
             } else {
                 Serial.println("No valid measurement (keeping previous, if any)");
             }

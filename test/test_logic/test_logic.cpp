@@ -283,6 +283,76 @@ void test_alert_hysteresis_zone(void) {
     }
 }
 
+// ------------------------------------------------------------
+// Этап 13 — calculate_window_average
+// ------------------------------------------------------------
+void test_avg_window_uniform_history(void) {
+    // Везде одно значение — среднее в каждой точке тоже это значение.
+    std::vector<float> h(24, 100.0f);
+    auto r = calculate_window_average(h, 12, 12);
+    TEST_ASSERT_EQUAL_size_t(12, r.size());
+    for (float v : r) TEST_ASSERT_EQUAL_FLOAT(100.0f, v);
+}
+
+void test_avg_window_two_windows_progressive(void) {
+    // Окно 1: 0..11, окно 2: 100..111
+    // r[i] = avg(i, 100+i) = 50 + i
+    std::vector<float> h;
+    for (int i = 0; i < 12; i++)  h.push_back(static_cast<float>(i));
+    for (int i = 0; i < 12; i++)  h.push_back(static_cast<float>(100 + i));
+    auto r = calculate_window_average(h, 12, 12);
+    TEST_ASSERT_EQUAL_size_t(12, r.size());
+    for (int i = 0; i < 12; i++) {
+        TEST_ASSERT_EQUAL_FLOAT(50.0f + static_cast<float>(i), r[i]);
+    }
+}
+
+void test_avg_window_24h_downsample(void) {
+    // 288 точек → 144 слотов. Каждый слот = avg 2 точек.
+    std::vector<float> h;
+    for (int i = 0; i < 288; i++) h.push_back(static_cast<float>(i));
+    auto r = calculate_window_average(h, 288, 144);
+    TEST_ASSERT_EQUAL_size_t(144, r.size());
+    TEST_ASSERT_EQUAL_FLOAT(0.5f,   r[0]);
+    TEST_ASSERT_EQUAL_FLOAT(2.5f,   r[1]);
+    TEST_ASSERT_EQUAL_FLOAT(286.5f, r[143]);
+}
+
+void test_avg_window_empty_history(void) {
+    std::vector<float> h;
+    auto r = calculate_window_average(h, 12, 12);
+    TEST_ASSERT_EQUAL_size_t(12, r.size());
+    for (float v : r) TEST_ASSERT_EQUAL_FLOAT(0.0f, v);
+}
+
+void test_avg_window_history_smaller_than_window(void) {
+    // Меньше одного окна — нет валидных полных окон → нули.
+    std::vector<float> h(10, 50.0f);
+    auto r = calculate_window_average(h, 12, 12);
+    TEST_ASSERT_EQUAL_size_t(12, r.size());
+    for (float v : r) TEST_ASSERT_EQUAL_FLOAT(0.0f, v);
+}
+
+void test_avg_window_invalid_sizes(void) {
+    std::vector<float> h(24, 50.0f);
+    TEST_ASSERT_EQUAL_size_t(0, calculate_window_average(h, 0,  12).size());
+    TEST_ASSERT_EQUAL_size_t(0, calculate_window_average(h, 12, 0).size());
+    TEST_ASSERT_EQUAL_size_t(0, calculate_window_average(h, -1, 12).size());
+    TEST_ASSERT_EQUAL_size_t(0, calculate_window_average(h, 12, -1).size());
+}
+
+void test_avg_window_4_to_2(void) {
+    // 8 точек, окно 4, target 2. n_windows = 2.
+    // Окно 1: [1,2,3,4], окно 2: [5,6,7,8]
+    // i=0: avg(1,2,5,6) = 3.5
+    // i=1: avg(3,4,7,8) = 5.5
+    std::vector<float> h{1, 2, 3, 4, 5, 6, 7, 8};
+    auto r = calculate_window_average(h, 4, 2);
+    TEST_ASSERT_EQUAL_size_t(2, r.size());
+    TEST_ASSERT_EQUAL_FLOAT(3.5f, r[0]);
+    TEST_ASSERT_EQUAL_FLOAT(5.5f, r[1]);
+}
+
 void test_alert_simulated_cycle(void) {
     // Эмулируем: CO2 растёт до 1600 (включается), падает до 1200 (выключается).
     bool active = false;
@@ -414,6 +484,14 @@ int main(int argc, char** argv) {
     RUN_TEST(test_alert_on_turns_off_below_1300);
     RUN_TEST(test_alert_hysteresis_zone);
     RUN_TEST(test_alert_simulated_cycle);
+
+    RUN_TEST(test_avg_window_uniform_history);
+    RUN_TEST(test_avg_window_two_windows_progressive);
+    RUN_TEST(test_avg_window_24h_downsample);
+    RUN_TEST(test_avg_window_empty_history);
+    RUN_TEST(test_avg_window_history_smaller_than_window);
+    RUN_TEST(test_avg_window_invalid_sizes);
+    RUN_TEST(test_avg_window_4_to_2);
 
     RUN_TEST(test_cycle_param_keeps_period_1h);
     RUN_TEST(test_cycle_param_keeps_period_24h);
