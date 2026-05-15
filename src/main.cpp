@@ -17,19 +17,24 @@
 #include "logic.h"
 
 // ============================================================
-// Этап 9: Первый график (CO2 за 1 час, 12 столбиков)
+// Этап 10: Все 9 экранов + графики 1h/24h/7d
 // ============================================================
-// Что нового по сравнению с Этапом 8:
-//   - read_last_n_from_file читает последние N измерений из файла
-//     через seek — без загрузки всего файла в RAM.
-//   - Экран 0 (CO2 для 1 hour) теперь рисует столбики реальных
-//     данных вместо placeholder-текста. Высота столбика =
-//     (co2 - 400) / (2000 - 400) * graph_height; значения вне
-//     диапазона клампятся к шкале.
-//   - Экраны 1-8 пока остаются с placeholder — реализация всех 9
-//     экранов будет на Этапе 10.
-//   - Заполнение справа налево: если данных меньше 12, левая
-//     часть остаётся пустой.
+// Что нового по сравнению с Этапом 9:
+//   - load_recent_measurements читает N последних записей через
+//     все файлы (от свежего к старому). Использует vector::insert
+//     в начало — для 2016 элементов на ESP32-S3 это ~50 мс,
+//     приемлемо.
+//   - extract_param_values переводит Measurement → float для
+//     одного из трёх показателей.
+//   - draw_bars / draw_area / draw_line — три типа отрисовки,
+//     каждый под свой период:
+//         1h  → 12 баров (по 5 мин на бар).
+//         24h → filled area, 144 точки (каждая = 10 мин).
+//         7d  → line, 168 точек (каждая = 1 час).
+//     Все рисуют справа налево; если данных меньше target —
+//     используем raw как есть, без downsample (чтобы не «растягивать»
+//     50 точек на 144 слота).
+//   - draw_x_labels — подписи под графиком в зависимости от периода.
 // Что нового:
 //   - Две кнопки на GPIO 4 («показатель») и GPIO 5 («период»).
 //     Один контакт каждой — на GND, второй — на GPIO. Внутренний
@@ -358,91 +363,200 @@ static void draw_warmup() {
     } while (display.nextPage());
 }
 
-// Рисуем 12 столбиков CO2 в области графика. Заполняем справа налево:
-// если данных меньше 12, левая часть остаётся пустой.
-static void draw_co2_bars_1h(const std::vector<Measurement>& ms) {
-    const int N_BARS = 12;
-    const int slot_w = GRAPH_W / N_BARS;       // 230/12 = 19
-    const int bar_w  = slot_w - 3;             // 16 (3 px зазор)
-    const int range  = CO2_SCALE_MAX - CO2_SCALE_MIN;
+// Сколько raw-измерений нужно для каждого периода (при шаге 5 мин).
+// Целевые размеры — сколько точек реально рисуем на графике.
+static const int RECORDS_FOR_PERIOD[3]  = { 12, 288, 2016 };
+static const int TARGET_POINTS[3]        = { 12, 144, 168  };
 
-    int items = std::min(static_cast<int>(ms.size()), N_BARS);
-    int start_slot = N_BARS - items;           // выравнивание вправо
-    int data_start = static_cast<int>(ms.size()) - items;
+struct Scale { int lo; int hi; };
 
-    for (int i = 0; i < items; i++) {
-        int v = ms[data_start + i].co2;
-        if (v < CO2_SCALE_MIN) v = CO2_SCALE_MIN;
-        if (v > CO2_SCALE_MAX) v = CO2_SCALE_MAX;
-        int bh = (v - CO2_SCALE_MIN) * GRAPH_H / range;
-
-        int x = GRAPH_X + (start_slot + i) * slot_w;
-        int y_top = GRAPH_Y + GRAPH_H - bh;
-        display.fillRect(x, y_top, bar_w, bh, GxEPD_BLACK);
+static Scale param_scale(int param_idx) {
+    switch (param_idx) {
+        case 0: return { CO2_SCALE_MIN,      CO2_SCALE_MAX      };
+        case 1: return { TEMP_SCALE_MIN,     TEMP_SCALE_MAX     };
+        case 2: return { HUMIDITY_SCALE_MIN, HUMIDITY_SCALE_MAX };
+        default: return { 0, 100 };
     }
-
-    // Рамка графика
-    display.drawRect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H, GxEPD_BLACK);
-
-    // Подписи шкалы Y (min/max)
-    display.setFont(&FreeSans9pt7b);
-    display.setCursor(0, GRAPH_Y + 8);
-    display.printf("%d", CO2_SCALE_MAX);
-    display.setCursor(0, GRAPH_BOTTOM);
-    display.printf("%d", CO2_SCALE_MIN);
 }
 
-// Подписи оси X для 1-часового графика.
-static void draw_x_labels_1h() {
+static int value_to_y(float v, int lo, int hi) {
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    int bh = static_cast<int>((v - lo) * GRAPH_H / (hi - lo));
+    return GRAPH_Y + GRAPH_H - bh;
+}
+
+// Достаём из вектора измерений нужный показатель как float.
+static std::vector<float> extract_param_values(
+        const std::vector<Measurement>& ms, int param_idx) {
+    std::vector<float> out;
+    out.reserve(ms.size());
+    for (const auto& m : ms) {
+        switch (param_idx) {
+            case 0: out.push_back(static_cast<float>(m.co2)); break;
+            case 1: out.push_back(m.temp_x10 / 10.0f); break;
+            case 2: out.push_back(static_cast<float>(m.humidity)); break;
+            default: out.push_back(0.0f);
+        }
+    }
+    return out;
+}
+
+// Тянем N последних записей из всех файлов, от свежего к старому.
+// Результат — в хронологическом порядке (старшие сзади).
+static std::vector<Measurement> load_recent_measurements(int n) {
+    std::vector<Measurement> result;
+    if (!fs_ok || n <= 0) return result;
+
+    auto nums = list_data_file_numbers();
+    if (nums.empty()) return result;
+
+    for (auto it = nums.rbegin(); it != nums.rend(); ++it) {
+        int need = n - static_cast<int>(result.size());
+        if (need <= 0) break;
+        String path(make_filename(*it).c_str());
+        auto chunk = read_last_n_from_file(path, need);
+        // chunk уже в хронологическом порядке; вставляем в начало.
+        result.insert(result.begin(), chunk.begin(), chunk.end());
+    }
+    return result;
+}
+
+// --- Три отрисовщика, общая семантика «справа налево» ---
+
+static void draw_bars(const std::vector<float>& values, int n_slots,
+                       int lo, int hi) {
+    if (hi <= lo) return;
+    int slot_w = GRAPH_W / n_slots;
+    int bar_w  = slot_w - 3;
+    if (bar_w < 1) bar_w = 1;
+
+    int items = std::min(static_cast<int>(values.size()), n_slots);
+    int start_slot = n_slots - items;
+    int data_start = static_cast<int>(values.size()) - items;
+
+    for (int i = 0; i < items; i++) {
+        int y_top = value_to_y(values[data_start + i], lo, hi);
+        int bh    = GRAPH_Y + GRAPH_H - y_top;
+        int x     = GRAPH_X + (start_slot + i) * slot_w;
+        if (bh > 0) display.fillRect(x, y_top, bar_w, bh, GxEPD_BLACK);
+    }
+}
+
+// Filled area: каждая точка — вертикальная линия от низа графика
+// до y(value). Выравниваем справа.
+static void draw_area(const std::vector<float>& values, int lo, int hi) {
+    if (hi <= lo) return;
+    int items = std::min(static_cast<int>(values.size()), GRAPH_W);
+    if (items <= 0) return;
+    int data_start = static_cast<int>(values.size()) - items;
+    int x0 = GRAPH_X + GRAPH_W - items;
+
+    for (int i = 0; i < items; i++) {
+        int y_top = value_to_y(values[data_start + i], lo, hi);
+        int x = x0 + i;
+        // Вертикальная линия от baseline (низ графика) до y_top.
+        display.drawLine(x, GRAPH_BOTTOM - 1, x, y_top, GxEPD_BLACK);
+    }
+}
+
+// Линейный график: соединяем последовательные точки.
+static void draw_line(const std::vector<float>& values, int lo, int hi) {
+    if (hi <= lo) return;
+    int items = std::min(static_cast<int>(values.size()), GRAPH_W);
+    if (items < 2) return;
+    int data_start = static_cast<int>(values.size()) - items;
+    int x0 = GRAPH_X + GRAPH_W - items;
+
+    int prev_x = -1, prev_y = -1;
+    for (int i = 0; i < items; i++) {
+        int y = value_to_y(values[data_start + i], lo, hi);
+        int x = x0 + i;
+        if (prev_x >= 0) display.drawLine(prev_x, prev_y, x, y, GxEPD_BLACK);
+        prev_x = x;
+        prev_y = y;
+    }
+}
+
+// Подписи Y-оси (min/max) — слева, левее GRAPH_X.
+static void draw_y_labels(int lo, int hi) {
     display.setFont(&FreeSans9pt7b);
-    display.setCursor(GRAPH_X, GRAPH_BOTTOM + 12);
-    display.print("-1h");
-    int now_w = 25;   // ширина "now" примерно
-    display.setCursor(GRAPH_X + GRAPH_W - now_w, GRAPH_BOTTOM + 12);
+    display.setCursor(0, GRAPH_Y + 8);
+    display.printf("%d", hi);
+    display.setCursor(0, GRAPH_BOTTOM);
+    display.printf("%d", lo);
+}
+
+static void draw_x_labels(int period_idx) {
+    display.setFont(&FreeSans9pt7b);
+    int y = GRAPH_BOTTOM + 12;
+    const char* left =
+        (period_idx == 0) ? "-1h" :
+        (period_idx == 1) ? "-24h" : "-7d";
+    display.setCursor(GRAPH_X, y);
+    display.print(left);
+    display.setCursor(GRAPH_X + GRAPH_W - 22, y);
     display.print("now");
 }
 
+// Главная функция — рисует один из 9 экранов.
 static void draw_screen(int screen, bool valid,
                          uint16_t co2, float t, float h) {
     if (screen < 0 || screen >= N_SCREENS) screen = 0;
     int param_idx  = screen / 3;
     int period_idx = screen % 3;
+    Scale s = param_scale(param_idx);
 
-    // Подгружаем историю только для тех экранов, где она нужна.
-    // На Этапе 9 — только screen 0 (CO2 1h, 12 записей).
-    std::vector<Measurement> history;
-    if (screen == 0 && fs_ok) {
-        history = read_last_n_from_file(get_current_file_path(), 12);
+    // Подгружаем данные нужного объёма и переводим в нужный показатель.
+    std::vector<float> raw;
+    if (fs_ok) {
+        int need = RECORDS_FOR_PERIOD[period_idx];
+        auto ms = (need <= 12)
+            ? read_last_n_from_file(get_current_file_path(), need)
+            : load_recent_measurements(need);
+        raw = extract_param_values(ms, param_idx);
     }
+
+    // Downsample только если данных больше, чем целевое число точек.
+    // Иначе используем raw как есть (партиальный график справа).
+    int target = TARGET_POINTS[period_idx];
+    std::vector<float> for_plot =
+        (static_cast<int>(raw.size()) > target)
+            ? downsample(raw, target)
+            : raw;
 
     display.setFullWindow();
     display.firstPage();
     do {
         display.fillScreen(GxEPD_WHITE);
 
-        // Title — y 16..28
+        // Title
         display.setFont(&FreeSans9pt7b);
         display.setCursor(GRAPH_X, 26);
         display.printf("%s for %s",
                        PARAM_NAMES[param_idx], PERIOD_NAMES[period_idx]);
 
-        if (screen == 0) {
-            // Реальный график CO2 1h
-            draw_co2_bars_1h(history);
-            draw_x_labels_1h();
-            // Текущее значение справа сверху (header пока не готов)
-            display.setCursor(SCREEN_W - 80, 12);
-            if (valid) display.printf("%u ppm", co2);
-            else       display.print("--- ppm");
-        } else {
-            // Placeholder для остальных экранов (реализация — Этап 10)
-            display.drawRect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H, GxEPD_BLACK);
-            display.setCursor(GRAPH_X + 10, GRAPH_Y + GRAPH_H / 2);
-            display.printf("(screen %d: stage 10)", screen);
+        // Граф
+        switch (period_idx) {
+            case 0: draw_bars(for_plot, TARGET_POINTS[0], s.lo, s.hi); break;
+            case 1: draw_area(for_plot, s.lo, s.hi); break;
+            case 2: draw_line(for_plot, s.lo, s.hi); break;
+        }
+        display.drawRect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H, GxEPD_BLACK);
 
-            display.setCursor(GRAPH_X, GRAPH_BOTTOM + 12);
-            if (valid) display.printf("CO2 %u  T %.1f  H %.0f%%", co2, t, h);
-            else       display.print("no data yet");
+        draw_y_labels(s.lo, s.hi);
+        draw_x_labels(period_idx);
+
+        // Текущее значение в правом верхнем углу.
+        display.setCursor(SCREEN_W - 80, 12);
+        if (valid) {
+            switch (param_idx) {
+                case 0: display.printf("%u ppm", co2); break;
+                case 1: display.printf("%.1f C", t); break;
+                case 2: display.printf("%.0f%%",  h); break;
+            }
+        } else {
+            display.print("---");
         }
     } while (display.nextPage());
     display.hibernate();
