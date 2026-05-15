@@ -64,6 +64,19 @@ int oldest_file_to_remove(const std::vector<int>& numbers, int max_files);
 std::vector<float> downsample(const std::vector<float>& input, int target_size);
 
 // ------------------------------------------------------------
+// Светофоры (Этап 11)
+// ------------------------------------------------------------
+// Возвращают уровень: 0 = плохо, 1 = терпимо, 2 = хорошо.
+// Пороги жёстко зашиты под значения из CLAUDE.md, чтобы тесты
+// чистой логики не зависели от #define в main.cpp.
+//   CO2:        good < 800, ok < 1500, иначе bad
+//   Temperature good 20..24°C, ok 18..26°C, иначе bad
+//   Humidity:   good 40..60%, ok 30..70%, иначе bad
+int get_co2_traffic_level(int co2);
+int get_temp_traffic_level(float temp_c);
+int get_humidity_traffic_level(int humidity_pct);
+
+// ------------------------------------------------------------
 // Навигация по 9 экранам (Этап 6)
 // ------------------------------------------------------------
 int cycle_param(int current_screen);

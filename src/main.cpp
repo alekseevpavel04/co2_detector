@@ -17,24 +17,20 @@
 #include "logic.h"
 
 // ============================================================
-// Этап 10: Все 9 экранов + графики 1h/24h/7d
+// Этап 11: Header со светофорами + линии трендов
 // ============================================================
-// Что нового по сравнению с Этапом 9:
-//   - load_recent_measurements читает N последних записей через
-//     все файлы (от свежего к старому). Использует vector::insert
-//     в начало — для 2016 элементов на ESP32-S3 это ~50 мс,
-//     приемлемо.
-//   - extract_param_values переводит Measurement → float для
-//     одного из трёх показателей.
-//   - draw_bars / draw_area / draw_line — три типа отрисовки,
-//     каждый под свой период:
-//         1h  → 12 баров (по 5 мин на бар).
-//         24h → filled area, 144 точки (каждая = 10 мин).
-//         7d  → line, 168 точек (каждая = 1 час).
-//     Все рисуют справа налево; если данных меньше target —
-//     используем raw как есть, без downsample (чтобы не «растягивать»
-//     50 точек на 144 слота).
-//   - draw_x_labels — подписи под графиком в зависимости от периода.
+// Что нового по сравнению с Этапом 10:
+//   - Header (y 0..15): три значения CO2/T/H слева и три светофора
+//     справа. Светофор — 3 точки диаметром 4 px:
+//       ●●● хорошо   ●●○ терпимо   ●○○ плохо
+//     Если значений ещё нет — пустые точки ○○○.
+//   - На графиках накладываем линии трендов:
+//       сплошная 1 px — идеальное значение (CO2 600, T 22, RH 50);
+//       пунктир       — пороги «плохо» (CO2 1500; T 18 и 26;
+//                                        RH 30 и 70).
+//     Управляется флагами SHOW_IDEAL_LINE и SHOW_THRESHOLD_BAD.
+//   - Удалили дубль текущего значения в правом верхнем углу —
+//     теперь это часть header'а.
 // Что нового:
 //   - Две кнопки на GPIO 4 («показатель») и GPIO 5 («период»).
 //     Один контакт каждой — на GND, второй — на GPIO. Внутренний
@@ -88,6 +84,23 @@
 #define TEMP_SCALE_MAX    30
 #define HUMIDITY_SCALE_MIN 20
 #define HUMIDITY_SCALE_MAX 80
+
+// --- Идеальные значения (для линии трендов) ---
+#define IDEAL_CO2         600
+#define IDEAL_TEMP        22.0f
+#define IDEAL_HUMIDITY    50
+
+// --- Пороги «плохо» (для пунктирной линии на графике) ---
+#define CO2_THRESHOLD_HI       1500
+#define TEMP_THRESHOLD_LO      18.0f
+#define TEMP_THRESHOLD_HI      26.0f
+#define HUMIDITY_THRESHOLD_LO  30
+#define HUMIDITY_THRESHOLD_HI  70
+
+// --- Управление визуализацией трендов ---
+#define SHOW_IDEAL_LINE      1
+#define SHOW_AVERAGE_LINE    1   // активируется на Этапе 13
+#define SHOW_THRESHOLD_BAD   1
 
 // --- Геометрия экрана (после setRotation(1) — 250×122) ---
 #define SCREEN_W       250
@@ -363,6 +376,28 @@ static void draw_warmup() {
     } while (display.nextPage());
 }
 
+// ------------------------------------------------------------
+// Тренды для графика: какие линии накладывать (Этап 11)
+// ------------------------------------------------------------
+struct ParamLines {
+    float ideal;          // желаемое значение
+    float threshold_lo;   // граница «плохо» снизу, <0 = нет
+    float threshold_hi;   // граница «плохо» сверху, <0 = нет
+};
+
+static ParamLines param_lines(int param_idx) {
+    switch (param_idx) {
+        case 0: return { static_cast<float>(IDEAL_CO2),
+                         -1.0f,
+                         static_cast<float>(CO2_THRESHOLD_HI) };
+        case 1: return { IDEAL_TEMP, TEMP_THRESHOLD_LO, TEMP_THRESHOLD_HI };
+        case 2: return { static_cast<float>(IDEAL_HUMIDITY),
+                         static_cast<float>(HUMIDITY_THRESHOLD_LO),
+                         static_cast<float>(HUMIDITY_THRESHOLD_HI) };
+        default: return { -1.0f, -1.0f, -1.0f };
+    }
+}
+
 // Сколько raw-измерений нужно для каждого периода (при шаге 5 мин).
 // Целевые размеры — сколько точек реально рисуем на графике.
 static const int RECORDS_FOR_PERIOD[3]  = { 12, 288, 2016 };
@@ -478,6 +513,58 @@ static void draw_line(const std::vector<float>& values, int lo, int hi) {
     }
 }
 
+// Горизонтальная линия на уровне value (если попадает в шкалу).
+// dash_len = 0 — сплошная; >0 — штрихи длиной dash_len с равным промежутком.
+static void draw_horizontal_value(float v, int lo, int hi, int dash_len) {
+    if (v < lo || v > hi) return;
+    int y = value_to_y(v, lo, hi);
+    if (dash_len <= 0) {
+        display.drawLine(GRAPH_X, y, GRAPH_X + GRAPH_W - 1, y, GxEPD_BLACK);
+        return;
+    }
+    int step = dash_len * 2;
+    for (int x = GRAPH_X; x < GRAPH_X + GRAPH_W; x += step) {
+        int x_end = std::min(x + dash_len - 1, GRAPH_X + GRAPH_W - 1);
+        display.drawLine(x, y, x_end, y, GxEPD_BLACK);
+    }
+}
+
+// Один светофор: 3 точки диаметром 4 px (radius 2), шаг 6.
+// level: 0 = плохо (1 закрашена), 1 = терпимо (2), 2 = хорошо (3).
+// level = -1 — все пустые (нет валидных данных).
+static void draw_traffic_light(int x, int y, int level) {
+    int filled = (level < 0) ? 0 : level + 1;
+    for (int i = 0; i < 3; i++) {
+        int dot_x = x + i * 6;
+        if (i < filled) display.fillCircle(dot_x, y, 2, GxEPD_BLACK);
+        else            display.drawCircle(dot_x, y, 2, GxEPD_BLACK);
+    }
+}
+
+// Header (y 0..15): значения CO2 / T / H слева, три светофора справа.
+static void draw_header(bool valid, uint16_t co2, float t, float h) {
+    display.setFont(&FreeSans9pt7b);
+
+    if (valid) {
+        display.setCursor(2, 12);
+        display.printf("%u  %.1f  %d", co2, t, static_cast<int>(h + 0.5f));
+    } else {
+        display.setCursor(2, 12);
+        display.print("---  ---  ---");
+    }
+
+    int co2_lvl = valid ? get_co2_traffic_level(co2)            : -1;
+    int t_lvl   = valid ? get_temp_traffic_level(t)             : -1;
+    int h_lvl   = valid ? get_humidity_traffic_level(
+                              static_cast<int>(h + 0.5f))       : -1;
+
+    int tl_y = 8;
+    int tl_x = SCREEN_W - 70;
+    draw_traffic_light(tl_x,      tl_y, co2_lvl);
+    draw_traffic_light(tl_x + 24, tl_y, t_lvl);
+    draw_traffic_light(tl_x + 48, tl_y, h_lvl);
+}
+
 // Подписи Y-оси (min/max) — слева, левее GRAPH_X.
 static void draw_y_labels(int lo, int hi) {
     display.setFont(&FreeSans9pt7b);
@@ -530,6 +617,9 @@ static void draw_screen(int screen, bool valid,
     do {
         display.fillScreen(GxEPD_WHITE);
 
+        // Header — значения и светофоры
+        draw_header(valid, co2, t, h);
+
         // Title
         display.setFont(&FreeSans9pt7b);
         display.setCursor(GRAPH_X, 26);
@@ -542,22 +632,26 @@ static void draw_screen(int screen, bool valid,
             case 1: draw_area(for_plot, s.lo, s.hi); break;
             case 2: draw_line(for_plot, s.lo, s.hi); break;
         }
-        display.drawRect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H, GxEPD_BLACK);
 
+        // Линии трендов поверх данных
+        ParamLines pl = param_lines(param_idx);
+        #if SHOW_IDEAL_LINE
+        if (pl.ideal >= s.lo && pl.ideal <= s.hi) {
+            draw_horizontal_value(pl.ideal, s.lo, s.hi, 0);   // сплошная
+        }
+        #endif
+        #if SHOW_THRESHOLD_BAD
+        if (pl.threshold_hi >= 0.0f) {
+            draw_horizontal_value(pl.threshold_hi, s.lo, s.hi, 8);  // длинный пунктир
+        }
+        if (pl.threshold_lo >= 0.0f) {
+            draw_horizontal_value(pl.threshold_lo, s.lo, s.hi, 8);
+        }
+        #endif
+
+        display.drawRect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H, GxEPD_BLACK);
         draw_y_labels(s.lo, s.hi);
         draw_x_labels(period_idx);
-
-        // Текущее значение в правом верхнем углу.
-        display.setCursor(SCREEN_W - 80, 12);
-        if (valid) {
-            switch (param_idx) {
-                case 0: display.printf("%u ppm", co2); break;
-                case 1: display.printf("%.1f C", t); break;
-                case 2: display.printf("%.0f%%",  h); break;
-            }
-        } else {
-            display.print("---");
-        }
     } while (display.nextPage());
     display.hibernate();
 }

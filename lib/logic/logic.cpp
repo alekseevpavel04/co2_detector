@@ -54,6 +54,27 @@ int oldest_file_to_remove(const std::vector<int>& numbers, int max_files) {
 }
 
 // ------------------------------------------------------------
+// Светофоры (Этап 11)
+// ------------------------------------------------------------
+int get_co2_traffic_level(int co2) {
+    if (co2 < 800)  return 2;   // хорошо
+    if (co2 < 1500) return 1;   // терпимо
+    return 0;                    // плохо
+}
+
+int get_temp_traffic_level(float t) {
+    if (t >= 20.0f && t <= 24.0f) return 2;
+    if (t >= 18.0f && t <= 26.0f) return 1;
+    return 0;
+}
+
+int get_humidity_traffic_level(int h) {
+    if (h >= 40 && h <= 60) return 2;
+    if (h >= 30 && h <= 70) return 1;
+    return 0;
+}
+
+// ------------------------------------------------------------
 // Downsampling (Этап 9)
 // ------------------------------------------------------------
 std::vector<float> downsample(const std::vector<float>& input, int target_size) {

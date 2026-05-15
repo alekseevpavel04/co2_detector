@@ -191,6 +191,60 @@ void test_downsample_real_24h(void) {
 }
 
 // ------------------------------------------------------------
+// Этап 11 — светофоры
+// ------------------------------------------------------------
+void test_co2_traffic_good(void) {
+    TEST_ASSERT_EQUAL_INT(2, get_co2_traffic_level(400));
+    TEST_ASSERT_EQUAL_INT(2, get_co2_traffic_level(799));
+}
+void test_co2_traffic_ok(void) {
+    TEST_ASSERT_EQUAL_INT(1, get_co2_traffic_level(800));   // граница
+    TEST_ASSERT_EQUAL_INT(1, get_co2_traffic_level(1000));
+    TEST_ASSERT_EQUAL_INT(1, get_co2_traffic_level(1499));
+}
+void test_co2_traffic_bad(void) {
+    TEST_ASSERT_EQUAL_INT(0, get_co2_traffic_level(1500));  // граница
+    TEST_ASSERT_EQUAL_INT(0, get_co2_traffic_level(3000));
+    TEST_ASSERT_EQUAL_INT(0, get_co2_traffic_level(5000));
+}
+
+void test_temp_traffic_good(void) {
+    TEST_ASSERT_EQUAL_INT(2, get_temp_traffic_level(20.0f));
+    TEST_ASSERT_EQUAL_INT(2, get_temp_traffic_level(22.0f));
+    TEST_ASSERT_EQUAL_INT(2, get_temp_traffic_level(24.0f));
+}
+void test_temp_traffic_ok(void) {
+    TEST_ASSERT_EQUAL_INT(1, get_temp_traffic_level(18.0f));
+    TEST_ASSERT_EQUAL_INT(1, get_temp_traffic_level(19.5f));
+    TEST_ASSERT_EQUAL_INT(1, get_temp_traffic_level(25.0f));
+    TEST_ASSERT_EQUAL_INT(1, get_temp_traffic_level(26.0f));
+}
+void test_temp_traffic_bad(void) {
+    TEST_ASSERT_EQUAL_INT(0, get_temp_traffic_level(17.9f));
+    TEST_ASSERT_EQUAL_INT(0, get_temp_traffic_level(26.1f));
+    TEST_ASSERT_EQUAL_INT(0, get_temp_traffic_level(10.0f));
+    TEST_ASSERT_EQUAL_INT(0, get_temp_traffic_level(35.0f));
+}
+
+void test_humidity_traffic_good(void) {
+    TEST_ASSERT_EQUAL_INT(2, get_humidity_traffic_level(40));
+    TEST_ASSERT_EQUAL_INT(2, get_humidity_traffic_level(50));
+    TEST_ASSERT_EQUAL_INT(2, get_humidity_traffic_level(60));
+}
+void test_humidity_traffic_ok(void) {
+    TEST_ASSERT_EQUAL_INT(1, get_humidity_traffic_level(30));
+    TEST_ASSERT_EQUAL_INT(1, get_humidity_traffic_level(35));
+    TEST_ASSERT_EQUAL_INT(1, get_humidity_traffic_level(65));
+    TEST_ASSERT_EQUAL_INT(1, get_humidity_traffic_level(70));
+}
+void test_humidity_traffic_bad(void) {
+    TEST_ASSERT_EQUAL_INT(0, get_humidity_traffic_level(29));
+    TEST_ASSERT_EQUAL_INT(0, get_humidity_traffic_level(71));
+    TEST_ASSERT_EQUAL_INT(0, get_humidity_traffic_level(0));
+    TEST_ASSERT_EQUAL_INT(0, get_humidity_traffic_level(100));
+}
+
+// ------------------------------------------------------------
 // Этап 6 — навигация: cycle_param, cycle_period
 // ------------------------------------------------------------
 // Раскладка экранов: index = param_idx*3 + period_idx
@@ -290,6 +344,16 @@ int main(int argc, char** argv) {
     RUN_TEST(test_downsample_4_to_2_averages);
     RUN_TEST(test_downsample_upscale_repeats);
     RUN_TEST(test_downsample_real_24h);
+
+    RUN_TEST(test_co2_traffic_good);
+    RUN_TEST(test_co2_traffic_ok);
+    RUN_TEST(test_co2_traffic_bad);
+    RUN_TEST(test_temp_traffic_good);
+    RUN_TEST(test_temp_traffic_ok);
+    RUN_TEST(test_temp_traffic_bad);
+    RUN_TEST(test_humidity_traffic_good);
+    RUN_TEST(test_humidity_traffic_ok);
+    RUN_TEST(test_humidity_traffic_bad);
 
     RUN_TEST(test_cycle_param_keeps_period_1h);
     RUN_TEST(test_cycle_param_keeps_period_24h);
