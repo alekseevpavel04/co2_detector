@@ -10,23 +10,24 @@
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 
+#include <vector>
+#include <algorithm>
+#include <cstring>
+
 #include "logic.h"
 
 // ============================================================
-// Этап 7: LittleFS — сохранение измерений
+// Этап 8: Ротация файлов
 // ============================================================
-// Что нового:
-//   - Файловая система LittleFS на partition по умолчанию
-//     (default.csv, ~1.5 МБ под /data). При первом запуске
-//     LittleFS.begin(false) может вернуть false (раздел пустой) —
-//     тогда пробуем LittleFS.begin(true) с форматированием.
-//   - Каждое успешное измерение упаковываем в struct Measurement
-//     (10 байт, packed, см. logic.h) и аппендим в текущий файл
-//     /data/measurements_NNN.bin. На этом этапе всегда _001.
-//   - is_measurement_valid проверяет диапазоны перед записью.
-//   - Логируем размер файла после записи — видно как растёт.
-//
-// Ротация файлов (90 КБ → новый, лимит 13 файлов) появится на Этапе 8.
+// Что нового по сравнению с Этапом 7:
+//   - Активный файл /data/measurements_NNN.bin определяется в
+//     runtime: сканируем директорию, берём файл с максимальным NNN.
+//   - Для скорости путь кэшируем в RTC memory (cached_file_path):
+//     scan ~50-100 мс — слишком расточительно делать каждое
+//     пробуждение. При rotate_files() и при reset обновляем кэш.
+//   - Когда размер активного файла достигает MAX_FILE_SIZE (90 КБ),
+//     создаём следующий по номеру. Если файлов после этого больше
+//     MAX_FILES (13) — удаляем самый старый.
 // Что нового:
 //   - Две кнопки на GPIO 4 («показатель») и GPIO 5 («период»).
 //     Один контакт каждой — на GND, второй — на GPIO. Внутренний
@@ -69,8 +70,9 @@
 #define RTC_MAGIC      0xDEADBEEF
 #define N_SCREENS      9
 
-// --- На Этапе 7 пишем всегда в _001. Ротация — Этап 8. ---
-#define CURRENT_FILE_NUMBER  1
+// --- Хранилище ---
+#define MAX_FILE_SIZE  (90 * 1024)   // байт. 9000 measurement ≈ 31 день при 5-мин интервале.
+#define MAX_FILES      13            // суммарно 90 КБ × 13 ≈ ~400 дней истории.
 
 SensirionI2cScd4x scd4x;
 GxEPD2_BW<EPD_DRIVER, EPD_DRIVER::HEIGHT> display(
@@ -86,6 +88,7 @@ RTC_DATA_ATTR bool     last_valid = false;
 RTC_DATA_ATTR uint16_t last_co2  = 0;
 RTC_DATA_ATTR float    last_t    = 0.0f;
 RTC_DATA_ATTR float    last_h    = 0.0f;
+RTC_DATA_ATTR char     cached_file_path[64] = "";
 
 bool sensor_ok = false;
 bool fs_ok     = false;
@@ -158,6 +161,75 @@ static void init_filesystem() {
                   (unsigned)LittleFS.totalBytes());
 }
 
+// Сканируем /data/, возвращаем номера всех файлов measurements_NNN.bin
+// (отсортированы по возрастанию).
+static std::vector<int> list_data_file_numbers() {
+    std::vector<int> result;
+    File dir = LittleFS.open("/data");
+    if (!dir || !dir.isDirectory()) return result;
+
+    File entry = dir.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory()) {
+            // entry.name() в разных версиях LittleFS возвращает либо
+            // "/data/measurements_001.bin", либо "measurements_001.bin".
+            // extract_file_number обрабатывает оба варианта.
+            int n = extract_file_number(std::string(entry.name()));
+            if (n > 0) result.push_back(n);
+        }
+        entry.close();
+        entry = dir.openNextFile();
+    }
+    dir.close();
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+// Возвращает путь к активному (последнему по номеру) файлу.
+// Использует RTC-кэш cached_file_path. При первом обращении
+// (или если кэш указывает на несуществующий файл) сканирует /data/.
+static String get_current_file_path() {
+    if (cached_file_path[0] != '\0' && LittleFS.exists(cached_file_path)) {
+        return String(cached_file_path);
+    }
+
+    auto nums = list_data_file_numbers();
+    int n = nums.empty() ? 1 : nums.back();
+    std::string path = make_filename(n);
+    std::strncpy(cached_file_path, path.c_str(), sizeof(cached_file_path) - 1);
+    cached_file_path[sizeof(cached_file_path) - 1] = '\0';
+    Serial.printf("Current file resolved: %s\n", cached_file_path);
+    return String(cached_file_path);
+}
+
+// Создаём следующий файл по номеру и удаляем самый старый,
+// если файлов теперь больше MAX_FILES. Обновляем RTC-кэш.
+static void rotate_files() {
+    auto nums = list_data_file_numbers();
+    int current = nums.empty() ? 1 : nums.back();
+    int next = next_file_number(current);
+
+    std::string new_path = make_filename(next);
+    File f = LittleFS.open(new_path.c_str(), "a", /*create=*/true);
+    if (f) f.close();
+    Serial.printf("Rotated to %s\n", new_path.c_str());
+
+    std::strncpy(cached_file_path, new_path.c_str(), sizeof(cached_file_path) - 1);
+    cached_file_path[sizeof(cached_file_path) - 1] = '\0';
+
+    // Удаляем старейший, если общее число файлов перевалило за MAX_FILES.
+    nums = list_data_file_numbers();
+    int to_del = oldest_file_to_remove(nums, MAX_FILES);
+    if (to_del > 0) {
+        std::string p = make_filename(to_del);
+        if (LittleFS.remove(p.c_str())) {
+            Serial.printf("Deleted oldest: %s\n", p.c_str());
+        } else {
+            Serial.printf("Failed to delete: %s\n", p.c_str());
+        }
+    }
+}
+
 // Аппендим Measurement в текущий файл. Возвращаем true при успехе.
 static bool save_measurement(const Measurement& m) {
     if (!fs_ok) {
@@ -170,8 +242,8 @@ static bool save_measurement(const Measurement& m) {
         return false;
     }
 
-    std::string path = make_filename(CURRENT_FILE_NUMBER);
-    File f = LittleFS.open(path.c_str(), "a", /*create=*/true);
+    String path = get_current_file_path();
+    File f = LittleFS.open(path, "a", /*create=*/true);
     if (!f) {
         Serial.printf("save_measurement: cannot open %s\n", path.c_str());
         return false;
@@ -186,9 +258,16 @@ static bool save_measurement(const Measurement& m) {
                       (unsigned)written, (unsigned)sizeof(m));
         return false;
     }
-    int records = (int)(fsize / sizeof(Measurement));
+    int records = static_cast<int>(fsize / sizeof(Measurement));
     Serial.printf("Saved to %s: +%u B, total %u B (%d records)\n",
                   path.c_str(), (unsigned)written, (unsigned)fsize, records);
+
+    // Ротация если файл достиг лимита.
+    if (fsize >= MAX_FILE_SIZE) {
+        Serial.printf("File reached %u bytes (limit %u), rotating...\n",
+                      (unsigned)fsize, (unsigned)MAX_FILE_SIZE);
+        rotate_files();
+    }
     return true;
 }
 
@@ -340,6 +419,7 @@ void setup() {
         current_screen = 0;
         last_valid = false;
         last_co2 = 0; last_t = 0.0f; last_h = 0.0f;
+        cached_file_path[0] = '\0';
         Serial.println("First boot — RTC initialized");
     }
     if (current_screen < 0 || current_screen >= N_SCREENS) current_screen = 0;

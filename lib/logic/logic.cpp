@@ -1,5 +1,6 @@
 #include "logic.h"
 #include <cstdio>
+#include <algorithm>
 
 // ------------------------------------------------------------
 // Валидация измерения (Этап 7)
@@ -41,6 +42,15 @@ int extract_file_number(const std::string& path) {
 
 int next_file_number(int current) {
     return current + 1;
+}
+
+// ------------------------------------------------------------
+// Ротация файлов (Этап 8)
+// ------------------------------------------------------------
+int oldest_file_to_remove(const std::vector<int>& numbers, int max_files) {
+    if (numbers.empty()) return -1;
+    if (static_cast<int>(numbers.size()) <= max_files) return -1;
+    return *std::min_element(numbers.begin(), numbers.end());
 }
 
 // ------------------------------------------------------------

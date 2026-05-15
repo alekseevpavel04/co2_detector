@@ -93,6 +93,44 @@ void test_next_file_number(void) {
 }
 
 // ------------------------------------------------------------
+// Этап 8 — ротация файлов
+// ------------------------------------------------------------
+void test_oldest_empty_list(void) {
+    std::vector<int> n;
+    TEST_ASSERT_EQUAL_INT(-1, oldest_file_to_remove(n, 13));
+}
+
+void test_oldest_under_max(void) {
+    std::vector<int> n{1, 2, 3};
+    TEST_ASSERT_EQUAL_INT(-1, oldest_file_to_remove(n, 13));
+}
+
+void test_oldest_at_max(void) {
+    std::vector<int> n;
+    for (int i = 1; i <= 13; i++) n.push_back(i);
+    TEST_ASSERT_EQUAL_INT(-1, oldest_file_to_remove(n, 13));
+}
+
+void test_oldest_over_max_returns_min(void) {
+    std::vector<int> n;
+    for (int i = 1; i <= 14; i++) n.push_back(i);
+    TEST_ASSERT_EQUAL_INT(1, oldest_file_to_remove(n, 13));
+}
+
+void test_oldest_unsorted_finds_min(void) {
+    // Список не отсортирован — функция всё равно находит минимум.
+    std::vector<int> n{5, 3, 8, 1, 9, 2, 7, 4, 11, 12, 6, 10, 13, 14};
+    TEST_ASSERT_EQUAL_INT(1, oldest_file_to_remove(n, 13));
+}
+
+void test_oldest_with_holes(void) {
+    // После N удалений номера не плотные: например, остались 5..18 (14 шт).
+    std::vector<int> n;
+    for (int i = 5; i <= 18; i++) n.push_back(i);
+    TEST_ASSERT_EQUAL_INT(5, oldest_file_to_remove(n, 13));
+}
+
+// ------------------------------------------------------------
 // Этап 6 — навигация: cycle_param, cycle_period
 // ------------------------------------------------------------
 // Раскладка экранов: index = param_idx*3 + period_idx
@@ -178,6 +216,13 @@ int main(int argc, char** argv) {
     RUN_TEST(test_extract_file_number_invalid);
     RUN_TEST(test_make_extract_roundtrip);
     RUN_TEST(test_next_file_number);
+
+    RUN_TEST(test_oldest_empty_list);
+    RUN_TEST(test_oldest_under_max);
+    RUN_TEST(test_oldest_at_max);
+    RUN_TEST(test_oldest_over_max_returns_min);
+    RUN_TEST(test_oldest_unsorted_finds_min);
+    RUN_TEST(test_oldest_with_holes);
 
     RUN_TEST(test_cycle_param_keeps_period_1h);
     RUN_TEST(test_cycle_param_keeps_period_24h);
