@@ -1,36 +1,51 @@
 #pragma once
 
+#include <cstdint>
+#include <cstddef>
+#include <string>
+
 // ============================================================
 // Чистая логика проекта — без зависимостей от Arduino/Wire/SPI.
-// Компилируется на ESP32 и на хосте (native) для юнит-тестов.
-//
-// Функции добавляются по мере реализации этапов:
-//   Этап 6:  cycle_param, cycle_period
-//   Этап 7:  extract_file_number, make_filename, next_file_number
-//   Этап 9:  downsample
-//   Этап 11: get_co2_traffic_level, get_temp_traffic_level,
-//            get_humidity_traffic_level
-//   Этап 12: update_alert_state
-//   Этап 13: calculate_averages
+// Компилируется на ESP32 и на хосте (native).
 // ============================================================
 
 // ------------------------------------------------------------
-// Навигация (Этап 6)
+// Структура одного измерения (Этап 7)
 // ------------------------------------------------------------
-// Экраны: всего 9, индекс 0..8.
-//   param_idx  = screen / 3   (0=CO2, 1=Temperature, 2=Humidity)
-//   period_idx = screen % 3   (0=1h, 1=24h, 2=7d)
-//
-// cycle_param  — кнопка «показатель»: меняет param_idx по кругу,
-//                period_idx остаётся прежним.
-// cycle_period — кнопка «период»:     меняет period_idx по кругу,
-//                param_idx остаётся прежним.
-//
-// Если current_screen вне диапазона 0..8 — возвращают 0 (защита
-// от мусора в RTC memory при первом включении).
+// Ровно 10 байт. packed обязателен — без него компилятор добавит
+// padding и sizeof(Measurement) станет 12 (КРИТИЧЕСКОЕ #5).
+struct __attribute__((packed)) Measurement {
+    uint32_t timestamp;     // секунды с старта (uptime). Обнуляется при power-off.
+    uint16_t co2;           // ppm (валидный диапазон 0..10000)
+    int16_t  temp_x10;      // T × 10 (235 = 23.5°C)
+    uint8_t  humidity;      // RH в % (0..100)
+    uint8_t  flags;         // резерв
+};
+static_assert(sizeof(Measurement) == 10, "Measurement must be 10 bytes");
+
+// Валидация: значения вне диапазона — мусор от глюка датчика
+// или плохого контакта; такие не сохраняем и не рисуем.
+bool is_measurement_valid(const Measurement& m);
+
+// ------------------------------------------------------------
+// File numbering (Этап 7)
+// ------------------------------------------------------------
+// Файлы данных называются /data/measurements_NNN.bin, где NNN —
+// трёхзначный номер с ведущими нулями (001..999).
+
+// "/data/measurements_001.bin" → "/data/measurements_001.bin"
+//                       ^номер^                   ^номер^
+std::string make_filename(int number);
+
+// "/data/measurements_007.bin" → 7
+// строка без правильного формата → -1
+int extract_file_number(const std::string& path);
+
+// Просто +1, обёртка для семантической ясности.
+int next_file_number(int current);
+
+// ------------------------------------------------------------
+// Навигация по 9 экранам (Этап 6)
+// ------------------------------------------------------------
 int cycle_param(int current_screen);
 int cycle_period(int current_screen);
-
-// Заглушка для test-инфраструктуры (с Этапа 1). Удалим, когда
-// в logic.cpp появится достаточно реального содержимого.
-int logic_stage_check();

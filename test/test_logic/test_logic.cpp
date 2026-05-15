@@ -7,10 +7,89 @@ void setUp(void) {}
 void tearDown(void) {}
 
 // ------------------------------------------------------------
-// Этап 1 — заглушка инфраструктуры
+// Этап 7 — Measurement struct и валидация
 // ------------------------------------------------------------
-void test_logic_skeleton(void) {
-    TEST_ASSERT_EQUAL_INT(1, logic_stage_check());
+void test_measurement_is_10_bytes(void) {
+    // КРИТИЧЕСКОЕ #5: если в структуре есть padding, формат
+    // бинарных файлов нарушается. Проверяем sizeof честно.
+    TEST_ASSERT_EQUAL_size_t(10, sizeof(Measurement));
+}
+
+void test_is_measurement_valid_typical(void) {
+    Measurement m{0, 645, 234, 45, 0};
+    TEST_ASSERT_TRUE(is_measurement_valid(m));
+}
+
+void test_is_measurement_valid_co2_range(void) {
+    Measurement m{0, 645, 234, 45, 0};
+    m.co2 = 0;
+    TEST_ASSERT_FALSE(is_measurement_valid(m));
+    m.co2 = 10000;
+    TEST_ASSERT_FALSE(is_measurement_valid(m));
+    m.co2 = 9999;
+    TEST_ASSERT_TRUE(is_measurement_valid(m));
+}
+
+void test_is_measurement_valid_temp_range(void) {
+    Measurement m{0, 645, 234, 45, 0};
+    m.temp_x10 = -400;
+    TEST_ASSERT_FALSE(is_measurement_valid(m));
+    m.temp_x10 = 500;
+    TEST_ASSERT_FALSE(is_measurement_valid(m));
+    m.temp_x10 = 250;
+    TEST_ASSERT_TRUE(is_measurement_valid(m));
+}
+
+void test_is_measurement_valid_humidity_range(void) {
+    Measurement m{0, 645, 234, 45, 0};
+    m.humidity = 101;
+    TEST_ASSERT_FALSE(is_measurement_valid(m));
+    m.humidity = 100;
+    TEST_ASSERT_TRUE(is_measurement_valid(m));
+    m.humidity = 0;
+    TEST_ASSERT_TRUE(is_measurement_valid(m));
+}
+
+// ------------------------------------------------------------
+// Этап 7 — file numbering
+// ------------------------------------------------------------
+void test_make_filename_zero_padding(void) {
+    TEST_ASSERT_EQUAL_STRING("/data/measurements_001.bin",
+                             make_filename(1).c_str());
+    TEST_ASSERT_EQUAL_STRING("/data/measurements_042.bin",
+                             make_filename(42).c_str());
+    TEST_ASSERT_EQUAL_STRING("/data/measurements_999.bin",
+                             make_filename(999).c_str());
+}
+
+void test_extract_file_number_valid(void) {
+    TEST_ASSERT_EQUAL_INT(1,  extract_file_number("/data/measurements_001.bin"));
+    TEST_ASSERT_EQUAL_INT(13, extract_file_number("/data/measurements_013.bin"));
+    TEST_ASSERT_EQUAL_INT(999, extract_file_number("/data/measurements_999.bin"));
+    // LittleFS entry.name() может возвращать имя без префикса /data/ —
+    // нормально, главное что префикс «measurements_» присутствует.
+    TEST_ASSERT_EQUAL_INT(7, extract_file_number("measurements_007.bin"));
+}
+
+void test_extract_file_number_invalid(void) {
+    TEST_ASSERT_EQUAL_INT(-1, extract_file_number("garbage"));
+    TEST_ASSERT_EQUAL_INT(-1, extract_file_number("measurements_"));
+    TEST_ASSERT_EQUAL_INT(-1, extract_file_number("measurements_abc.bin"));
+    TEST_ASSERT_EQUAL_INT(-1, extract_file_number(""));
+}
+
+void test_make_extract_roundtrip(void) {
+    // Туда-обратно для всех допустимых номеров.
+    for (int n : {1, 7, 42, 100, 256, 999}) {
+        std::string s = make_filename(n);
+        TEST_ASSERT_EQUAL_INT(n, extract_file_number(s));
+    }
+}
+
+void test_next_file_number(void) {
+    TEST_ASSERT_EQUAL_INT(2,  next_file_number(1));
+    TEST_ASSERT_EQUAL_INT(14, next_file_number(13));
+    TEST_ASSERT_EQUAL_INT(100, next_file_number(99));
 }
 
 // ------------------------------------------------------------
@@ -87,7 +166,18 @@ void test_cycle_period_is_modulo_3(void) {
 
 int main(int argc, char** argv) {
     UNITY_BEGIN();
-    RUN_TEST(test_logic_skeleton);
+
+    RUN_TEST(test_measurement_is_10_bytes);
+    RUN_TEST(test_is_measurement_valid_typical);
+    RUN_TEST(test_is_measurement_valid_co2_range);
+    RUN_TEST(test_is_measurement_valid_temp_range);
+    RUN_TEST(test_is_measurement_valid_humidity_range);
+
+    RUN_TEST(test_make_filename_zero_padding);
+    RUN_TEST(test_extract_file_number_valid);
+    RUN_TEST(test_extract_file_number_invalid);
+    RUN_TEST(test_make_extract_roundtrip);
+    RUN_TEST(test_next_file_number);
 
     RUN_TEST(test_cycle_param_keeps_period_1h);
     RUN_TEST(test_cycle_param_keeps_period_24h);

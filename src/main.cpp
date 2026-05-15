@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
+#include <LittleFS.h>
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
 #include <SensirionI2cScd4x.h>
@@ -12,8 +13,20 @@
 #include "logic.h"
 
 // ============================================================
-// Этап 6: Кнопки + навигация по 9 экранам
+// Этап 7: LittleFS — сохранение измерений
 // ============================================================
+// Что нового:
+//   - Файловая система LittleFS на partition по умолчанию
+//     (default.csv, ~1.5 МБ под /data). При первом запуске
+//     LittleFS.begin(false) может вернуть false (раздел пустой) —
+//     тогда пробуем LittleFS.begin(true) с форматированием.
+//   - Каждое успешное измерение упаковываем в struct Measurement
+//     (10 байт, packed, см. logic.h) и аппендим в текущий файл
+//     /data/measurements_NNN.bin. На этом этапе всегда _001.
+//   - is_measurement_valid проверяет диапазоны перед записью.
+//   - Логируем размер файла после записи — видно как растёт.
+//
+// Ротация файлов (90 КБ → новый, лимит 13 файлов) появится на Этапе 8.
 // Что нового:
 //   - Две кнопки на GPIO 4 («показатель») и GPIO 5 («период»).
 //     Один контакт каждой — на GND, второй — на GPIO. Внутренний
@@ -56,6 +69,9 @@
 #define RTC_MAGIC      0xDEADBEEF
 #define N_SCREENS      9
 
+// --- На Этапе 7 пишем всегда в _001. Ротация — Этап 8. ---
+#define CURRENT_FILE_NUMBER  1
+
 SensirionI2cScd4x scd4x;
 GxEPD2_BW<EPD_DRIVER, EPD_DRIVER::HEIGHT> display(
     EPD_DRIVER(PIN_EPD_CS, PIN_EPD_DC, PIN_EPD_RST, PIN_EPD_BUSY)
@@ -72,6 +88,7 @@ RTC_DATA_ATTR float    last_t    = 0.0f;
 RTC_DATA_ATTR float    last_h    = 0.0f;
 
 bool sensor_ok = false;
+bool fs_ok     = false;
 
 static const char* PARAM_NAMES[3]  = { "CO2", "Temperature", "Humidity" };
 static const char* PERIOD_NAMES[3] = { "1 hour", "24 hours", "7 days" };
@@ -116,6 +133,63 @@ static void init_display() {
     display.init(115200, /*initial=*/true, 10, false);
     display.setRotation(1);
     display.setTextColor(GxEPD_BLACK);
+}
+
+static void init_filesystem() {
+    // false = не форматировать при ошибке монтирования. Если первый запуск
+    // и раздел чистый — это вернёт false, тогда пробуем с format=true.
+    if (!LittleFS.begin(false)) {
+        Serial.println("LittleFS mount failed, formatting...");
+        if (!LittleFS.begin(true)) {
+            Serial.println("ERROR: LittleFS format failed too!");
+            fs_ok = false;
+            return;
+        }
+        Serial.println("LittleFS formatted and mounted");
+    }
+    fs_ok = true;
+
+    if (!LittleFS.exists("/data")) {
+        LittleFS.mkdir("/data");
+        Serial.println("Created /data directory");
+    }
+    Serial.printf("LittleFS: %u / %u bytes used\n",
+                  (unsigned)LittleFS.usedBytes(),
+                  (unsigned)LittleFS.totalBytes());
+}
+
+// Аппендим Measurement в текущий файл. Возвращаем true при успехе.
+static bool save_measurement(const Measurement& m) {
+    if (!fs_ok) {
+        Serial.println("save_measurement: FS not mounted");
+        return false;
+    }
+    if (!is_measurement_valid(m)) {
+        Serial.printf("save_measurement: invalid (co2=%u t10=%d h=%u), skipping\n",
+                      m.co2, m.temp_x10, m.humidity);
+        return false;
+    }
+
+    std::string path = make_filename(CURRENT_FILE_NUMBER);
+    File f = LittleFS.open(path.c_str(), "a", /*create=*/true);
+    if (!f) {
+        Serial.printf("save_measurement: cannot open %s\n", path.c_str());
+        return false;
+    }
+    size_t written = f.write(reinterpret_cast<const uint8_t*>(&m), sizeof(m));
+    f.flush();
+    size_t fsize = f.size();
+    f.close();
+
+    if (written != sizeof(m)) {
+        Serial.printf("save_measurement: short write %u/%u\n",
+                      (unsigned)written, (unsigned)sizeof(m));
+        return false;
+    }
+    int records = (int)(fsize / sizeof(Measurement));
+    Serial.printf("Saved to %s: +%u B, total %u B (%d records)\n",
+                  path.c_str(), (unsigned)written, (unsigned)fsize, records);
+    return true;
 }
 
 static bool take_measurement(uint16_t& co2, float& t, float& h) {
@@ -285,6 +359,7 @@ void setup() {
                   reason == ESP_SLEEP_WAKEUP_TIMER ? "TIMER" : "OTHER");
 
     init_display();
+    init_filesystem();
 
     if (from_button) {
         // Кнопка: меняем экран, без измерения.
@@ -321,6 +396,15 @@ void setup() {
             if (take_measurement(co2, t, h)) {
                 last_co2 = co2; last_t = t; last_h = h; last_valid = true;
                 Serial.printf("CO2: %u ppm, T: %.1f C, H: %.0f %%\n", co2, t, h);
+
+                // Сохраняем в LittleFS (Этап 7).
+                Measurement rec{};
+                rec.timestamp = total_uptime_before_sleep + millis() / 1000;
+                rec.co2       = co2;
+                rec.temp_x10  = static_cast<int16_t>(t * 10.0f);
+                rec.humidity  = static_cast<uint8_t>(h + 0.5f);
+                rec.flags     = 0;
+                save_measurement(rec);
             } else {
                 Serial.println("No valid measurement (keeping previous, if any)");
             }
