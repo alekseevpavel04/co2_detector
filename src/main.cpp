@@ -206,23 +206,38 @@ static void init_sensor() {
     scd4x.begin(Wire, SCD41_I2C_ADDR_62);
 
     if (wake_count == 1) {
-        int16_t err = scd4x.stopPeriodicMeasurement();
-        if (err) {
+        scd4x.wakeUp();
+        delay(30);
+        int16_t serr = scd4x.stopPeriodicMeasurement();
+        if (serr) {
             Serial.println("stopPeriodicMeasurement (ignored on first boot):");
-            print_scd_error("stop", err);
+            print_scd_error("stop", serr);
         }
         delay(500);
     }
 
+    // После powerDown датчик просыпается не мгновенно, и первый wake_up он
+    // не ACK'ает. Если сразу дёрнуть getSerialNumber — получим NACK
+    // ("not responding") и пропустим замер → "No data" через раз. Поэтому
+    // повторяем wakeUp + проверку связи, пока датчик не ответит.
     uint64_t sn = 0;
-    int16_t err = scd4x.getSerialNumber(sn);
-    if (err) {
-        Serial.println("ERROR: SCD41 not responding.");
+    int16_t err = 1;
+    sensor_ok = false;
+    for (int attempt = 1; attempt <= 5; attempt++) {
+        scd4x.wakeUp();
+        delay(50);
+        err = scd4x.getSerialNumber(sn);
+        if (!err) {
+            sensor_ok = true;
+            VLOG("SCD41 OK (attempt %d). SN: 0x%012llx\n",
+                 attempt, (unsigned long long)sn);
+            break;
+        }
+        delay(50);
+    }
+    if (!sensor_ok) {
+        Serial.println("ERROR: SCD41 not responding after retries.");
         print_scd_error("getSerialNumber", err);
-        sensor_ok = false;
-    } else {
-        VLOG("SCD41 OK. SN: 0x%012llx\n", (unsigned long long)sn);
-        sensor_ok = true;
     }
 }
 
@@ -518,31 +533,37 @@ static bool save_measurement(const Measurement& m) {
 }
 
 static bool take_measurement(uint16_t& co2, float& t, float& h) {
-    neopixelWrite(LED_PIN, 0, LED_LEVEL, 0);
+    neopixelWrite(LED_PIN, 0, LED_LEVEL, 0);  // зелёный во время замера
 
-    int16_t err = scd4x.measureSingleShot();
-    if (err) {
-        Serial.println("measureSingleShot failed:");
-        print_scd_error("measureSingleShot", err);
+    // Первый single-shot после пробуждения датчика часто приходит пустым
+    // (CO2=0, «кондиционирующий»). Повторяем до 3 раз, пока не получим
+    // валидный замер.
+    const int MAX_ATTEMPTS = 3;
+    for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        int16_t err = scd4x.measureSingleShot();
+        if (err) {
+            print_scd_error("measureSingleShot", err);
+            continue;
+        }
+
+        delay(MEASUREMENT_DELAY_MS);
+
+        err = scd4x.readMeasurement(co2, t, h);
+        if (err) {
+            print_scd_error("readMeasurement", err);
+            continue;
+        }
+        if (co2 == 0) {
+            VLOG("CO2=0 (not ready), attempt %d/%d\n", attempt, MAX_ATTEMPTS);
+            continue;
+        }
+
         neopixelWrite(LED_PIN, 0, 0, 0);
-        return false;
+        return true;
     }
 
-    delay(MEASUREMENT_DELAY_MS);
-
-    err = scd4x.readMeasurement(co2, t, h);
     neopixelWrite(LED_PIN, 0, 0, 0);
-
-    if (err) {
-        Serial.println("readMeasurement failed:");
-        print_scd_error("readMeasurement", err);
-        return false;
-    }
-    if (co2 == 0) {
-        Serial.println("CO2=0 (sensor not ready)");
-        return false;
-    }
-    return true;
+    return false;
 }
 
 static void draw_warmup() {
