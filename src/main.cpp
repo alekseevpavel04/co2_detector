@@ -71,7 +71,9 @@
 #define BUTTON_RELEASE_TIMEOUT  3000       // мс — сколько ждём отпускания
 
 // --- Драйвер e-Paper ---
-#define EPD_DRIVER     GxEPD2_213_B73
+// На нашей панели Waveshare 2.13" работает именно BN (SSD1680).
+// С B73 контроллер отрабатывает обновление, но стекло остаётся пустым.
+#define EPD_DRIVER     GxEPD2_213_BN
 
 #define RTC_MAGIC      0xDEADBEEF
 #define N_SCREENS      9
