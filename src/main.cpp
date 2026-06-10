@@ -945,6 +945,12 @@ static void go_to_sleep() {
         (1ULL << PIN_BUTTON_PARAM) | (1ULL << PIN_BUTTON_PERIOD);
     esp_sleep_enable_ext1_wakeup(button_mask, ESP_EXT1_WAKEUP_ANY_LOW);
 
+    // КРИТИЧНО: по умолчанию домен RTC_PERIPH в deep sleep выключается, и
+    // внутренняя подтяжка кнопочных пинов "умирает" → GPIO всплывает, ext1
+    // (ANY_LOW) ловит LOW и будит прибор каждые пару секунд без нажатия.
+    // Держим домен включённым, чтобы pull-up жил во сне.
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+
     Serial.flush();
     esp_deep_sleep_start();
     // unreachable
