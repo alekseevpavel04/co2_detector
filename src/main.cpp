@@ -988,12 +988,19 @@ static void go_to_sleep() {
 // ------------------------------------------------------------
 
 void setup() {
+    // Снижаем частоту CPU: активная фаза — это в основном ожидание датчика и
+    // экрана (I/O), вычислений мало, скорость не нужна — а ток меньше. 80 МГц
+    // безопасно для UART/SPI/I2C. delay()/light sleep считаются по реальному
+    // времени, поэтому длительность замера не меняется.
+    setCpuFrequencyMhz(80);
+
     Serial.begin(115200);
     delay(100);
     Serial.println();
     Serial.println("============================");
     Serial.println("Stage 6: Buttons");
     Serial.println("============================");
+    Serial.printf("CPU @ %d MHz\n", getCpuFrequencyMhz());
 
     // RTC magic + защита от мусора в current_screen.
     if (rtc_magic != RTC_MAGIC) {
