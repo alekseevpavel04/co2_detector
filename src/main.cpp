@@ -66,9 +66,17 @@
 
 // --- Интервалы ---
 #define MEASUREMENT_DELAY_MS    5000
-#define MEASUREMENT_INTERVAL    300        // sleep между замерами, сек
+#define MEASUREMENT_INTERVAL    900        // sleep между замерами, сек (15 мин — экономия батареи)
 #define AVERAGE_RECALC_INTERVAL 86400      // пересчёт средних раз в сутки
 #define BUTTON_RELEASE_TIMEOUT  3000       // мс — сколько ждём отпускания
+
+// --- Экономия экрана (e-Paper держит картинку даром; full refresh дорогой) ---
+// По таймеру перерисовываем только если значение заметно изменилось, либо
+// прошёл FULL_REFRESH_INTERVAL (от «теней»), либо сменился алерт.
+#define FULL_REFRESH_INTERVAL   3600       // сек — не реже раза в час полный refresh
+#define REDRAW_CO2_DELTA        30         // ppm
+#define REDRAW_TEMP_DELTA_X10   3          // 0.3 °C (в десятых)
+#define REDRAW_HUM_DELTA        2          // %
 
 // --- Драйвер e-Paper ---
 // На нашей панели Waveshare 2.13" работает именно BN (SSD1680).
@@ -165,6 +173,14 @@ RTC_DATA_ATTR float    last_h    = 0.0f;
 RTC_DATA_ATTR bool     alert_active = false;
 RTC_DATA_ATTR uint32_t last_average_recalc_uptime = 0;
 RTC_DATA_ATTR char     cached_file_path[64] = "";
+
+// Что сейчас нарисовано на экране — чтобы по таймеру не обновлять зря.
+RTC_DATA_ATTR uint32_t last_full_refresh_uptime = 0;
+RTC_DATA_ATTR bool     last_shown_valid = false;
+RTC_DATA_ATTR uint16_t last_shown_co2   = 0;
+RTC_DATA_ATTR float    last_shown_t     = 0.0f;
+RTC_DATA_ATTR float    last_shown_h     = 0.0f;
+RTC_DATA_ATTR bool     last_shown_alert = false;
 
 // AverageCache: точное хранилище уже отрисовываемых точек.
 // uint16 для CO2 (ppm), int16 для T*10 (десятые градуса),
@@ -533,8 +549,6 @@ static bool save_measurement(const Measurement& m) {
 }
 
 static bool take_measurement(uint16_t& co2, float& t, float& h) {
-    neopixelWrite(LED_PIN, 0, LED_LEVEL, 0);  // зелёный во время замера
-
     // Первый single-shot после пробуждения датчика часто приходит пустым
     // (CO2=0, «кондиционирующий»). Повторяем до 3 раз, пока не получим
     // валидный замер.
@@ -546,7 +560,14 @@ static bool take_measurement(uint16_t& co2, float& t, float& h) {
             continue;
         }
 
-        delay(MEASUREMENT_DELAY_MS);
+        // Ждём готовности замера (~5 сек) в LIGHT SLEEP — ESP ~1-2 мА вместо
+        // ~40 мА (главная экономия). Чтобы light sleep не ломал ext1 по кнопке,
+        // go_to_sleep перед deep sleep сбрасывает источники пробуждения и
+        // снимает возможный hold с кнопочных пинов.
+        Serial.flush();
+        esp_sleep_enable_timer_wakeup(
+            static_cast<uint64_t>(MEASUREMENT_DELAY_MS) * 1000ULL);
+        esp_light_sleep_start();
 
         err = scd4x.readMeasurement(co2, t, h);
         if (err) {
@@ -558,11 +579,9 @@ static bool take_measurement(uint16_t& co2, float& t, float& h) {
             continue;
         }
 
-        neopixelWrite(LED_PIN, 0, 0, 0);
         return true;
     }
 
-    neopixelWrite(LED_PIN, 0, 0, 0);
     return false;
 }
 
@@ -928,6 +947,14 @@ static void go_to_sleep() {
     total_uptime_before_sleep += millis() / 1000;
     Serial.printf("Total uptime: %u sec. Sleeping.\n", total_uptime_before_sleep);
 
+    // После light sleep на фазе замера подсистема сна/пины могли остаться в
+    // состоянии, в котором ext1 по кнопке не срабатывал. Чистим: сбрасываем
+    // все источники пробуждения и снимаем возможный hold с кнопочных пинов
+    // перед тем, как заново арм-ить таймер и ext1.
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    rtc_gpio_hold_dis(static_cast<gpio_num_t>(PIN_BUTTON_PARAM));
+    rtc_gpio_hold_dis(static_cast<gpio_num_t>(PIN_BUTTON_PERIOD));
+
     // --- Timer wake (через MEASUREMENT_INTERVAL сек) ---
     esp_sleep_enable_timer_wakeup(
         static_cast<uint64_t>(MEASUREMENT_INTERVAL) * 1000000ULL);
@@ -979,6 +1006,10 @@ void setup() {
         alert_active = false;
         last_average_recalc_uptime = 0;
         cached_file_path[0] = '\0';
+        last_full_refresh_uptime = 0;
+        last_shown_valid = false;
+        last_shown_co2 = 0; last_shown_t = 0.0f; last_shown_h = 0.0f;
+        last_shown_alert = false;
         Serial.println("First boot — RTC initialized");
     }
     if (current_screen < 0 || current_screen >= N_SCREENS) current_screen = 0;
@@ -1067,7 +1098,34 @@ void setup() {
         }
     }
 
-    draw_screen(current_screen, last_valid, last_co2, last_t, last_h);
+    // --- Обновляем экран только когда нужно (экономия батареи) ---
+    // e-Paper держит картинку без питания, полный refresh + загрузка истории
+    // для графика — дорогие. Поэтому:
+    //   - кнопка: всегда перерисовываем (пользователь смотрит, листает экраны);
+    //   - таймер: только если значения заметно изменились, сменился алерт,
+    //     или прошёл час (от «теней»); иначе экран не трогаем вообще.
+    uint32_t draw_uptime = total_uptime_before_sleep + millis() / 1000;
+    bool values_changed =
+        !last_shown_valid ||
+        abs((int)last_co2 - (int)last_shown_co2) >= REDRAW_CO2_DELTA ||
+        abs((int)(last_t * 10) - (int)(last_shown_t * 10)) >= REDRAW_TEMP_DELTA_X10 ||
+        abs((int)last_h - (int)last_shown_h) >= REDRAW_HUM_DELTA;
+    bool periodic_full = (draw_uptime - last_full_refresh_uptime) >= FULL_REFRESH_INTERVAL;
+    bool alert_changed = (alert_active != last_shown_alert);
+    bool need_draw = from_button || periodic_full || values_changed || alert_changed;
+
+    if (need_draw) {
+        draw_screen(current_screen, last_valid, last_co2, last_t, last_h);
+        last_full_refresh_uptime = draw_uptime;
+        last_shown_valid = last_valid;
+        last_shown_co2 = last_co2;
+        last_shown_t   = last_t;
+        last_shown_h   = last_h;
+        last_shown_alert = alert_active;
+    } else {
+        VLOGLN("Screen unchanged — skip refresh (saving power)");
+        display.hibernate();   // на всякий случай: контроллер экрана в сон
+    }
 
     if (from_button) {
         wait_for_button_release();
