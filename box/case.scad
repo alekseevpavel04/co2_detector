@@ -60,15 +60,26 @@ barb_h    = 2.5;    // высота зацепа по Z
 bead_in   = 1.2;    // вылет бусины-зацепа на стенке
 bead_z    = 1.5;    // толщина бусины по Z
 
+/* ---------- Полка-перегородка (двухуровневая компоновка) ---------- */
+shelf_gap = 0.5;    // зазор полки над самой высокой платой (SCD41)
+shelf_t   = 1.5;    // толщина полки
+ledge_in  = 2.0;    // вылет опорной полочки внутрь (верх/низ стенки)
+ledge_t   = 1.5;    // высота опорной полочки
+wire_w    = 8;      // ширина выреза в полке под провода батареи
+finger_d  = 14;     // палец-отверстие в полке (вынуть полку)
+batt_rib  = 1.5;    // рёбра-держатели батарейного отсека по Y
+
 /* ---------- Вентиляция ---------- */
 vent_w = 1.6;       // ширина щели
 
 /* ---------- Производные ---------- */
-front_layer   = 8;                             // слой электроники по Z
+front_layer   = 8;                             // отсек электроники по Z
 epd_lower_gap = 2;                             // зазор экран–нижние платы
 inner_w = max(bat_l, epd_pcb_l) + 2*fit;
 inner_h = max(bat_w, epd_pcb_w + max(esp_w, scd_w) + epd_lower_gap) + 2*fit;
-inner_d = front_layer + bat_h;
+shelf_z = floor_t + front_layer + shelf_gap;   // низ полки-перегородки
+bat_z   = shelf_z + shelf_t;                   // низ батарейного отсека (= верх полки)
+inner_d = (bat_z - floor_t) + bat_h;           // полная глубина полости
 outer_w = inner_w + 2*wall;
 outer_h = inner_h + 2*wall;
 lid_z0  = floor_t + inner_d;                   // фронт крышки (= тыл батареи)
@@ -91,7 +102,7 @@ btn_y  = wall + (epd_y - wall)/2;
 
 bat_x = wall + (inner_w - bat_l)/2;
 bat_y = wall + (inner_h - bat_w)/2;
-bat_z = floor_t + front_layer;
+// bat_z задан выше в производных
 
 // положения язычков крышки (по X) — симметрично, выемка-палец по центру между ними
 tab_x1 = outer_w/2 - 16;
@@ -168,7 +179,7 @@ module posts() {
 //  внутреннего воздуха. Удерживается камерой + прижимом батареи.
 // ============================================================
 module scd_chamber() {
-    ch_h = front_layer;                       // высота перегородок по Z
+    ch_h = shelf_z - floor_t;                 // до низа полки (заодно опора полки)
     x_in = scd_x - cham_clear;                // правая грань левой перегородки
     y_in = scd_y + scd_w + cham_clear;        // нижняя грань верхней перегородки
     // левая перегородка
@@ -198,6 +209,17 @@ module top_beads() {
             cube([tab_w + 1, bead_in, bead_z]);
 }
 
+// Опорные полочки под полку-перегородку (на верхней и нижней стенках).
+// Только в зонах, где платы их не задевают (над экраном / над ESP, мимо SCD).
+module shelf_ledges() {
+    // верхняя стенка — во всю ширину (над экраном, Z экрана ниже)
+    translate([wall, wall + inner_h - ledge_in, shelf_z - ledge_t])
+        cube([inner_w, ledge_in, ledge_t]);
+    // нижняя стенка — слева до зоны SCD (над ESP); справа полку держит камера SCD41
+    translate([wall, wall, shelf_z - ledge_t])
+        cube([scd_x - 2 - wall, ledge_in, ledge_t]);
+}
+
 // ============================================================
 //  Корпус
 // ============================================================
@@ -210,6 +232,7 @@ module shell() {
             }
             posts();
             scd_chamber();
+            shelf_ledges();
             bottom_lip();
             top_beads();
         }
@@ -217,6 +240,31 @@ module shell() {
         buttons_cut();
         usb_cut();
         vents_cut();
+    }
+}
+
+// ============================================================
+//  Полка-перегородка (уровень 2): дно батарейного отсека,
+//  закрывает электронику. Лежит на полочках, вынимается за палец.
+// ============================================================
+module shelf() {
+    cl = 0.4;
+    difference() {
+        union() {
+            translate([wall + cl, wall + cl, shelf_z])
+                cube([inner_w - 2*cl, inner_h - 2*cl, shelf_t]);
+            // рёбра-держатели батарейного отсека по Y (центрируют его)
+            translate([bat_x - 0.5, bat_y - batt_rib - 0.5, shelf_z + shelf_t])
+                cube([bat_l + 1, batt_rib, 3]);
+            translate([bat_x - 0.5, bat_y + bat_w + 0.5, shelf_z + shelf_t])
+                cube([bat_l + 1, batt_rib, 3]);
+        }
+        // вырез под провода батареи (нижний-левый, вниз к ESP)
+        translate([wall + 5, wall + cl - 1, shelf_z - 1])
+            cube([wire_w, 6, shelf_t + 2]);
+        // палец-отверстие — поддеть и вынуть полку
+        translate([outer_w/2, wall + inner_h/2, shelf_z - 1])
+            cylinder(d = finger_d, h = shelf_t + 2);
     }
 }
 
@@ -254,10 +302,11 @@ module lid() {
 // ============================================================
 //  Тела модулей (для проверки посадки; в STL не идут)
 // ============================================================
-module ghosts(show_bat = true) {
+module ghosts(show_bat = true, show_shelf = true) {
     color("green", 0.45) translate([epd_x, epd_y, floor_t]) cube([epd_pcb_l, epd_pcb_w, epd_stack]);
     color("blue",  0.45) translate([esp_x, esp_y, floor_t]) cube([esp_l, esp_w, esp_h]);
     color("red",   0.55) translate([scd_x, scd_y, floor_t]) cube([scd_l, scd_w, scd_h]);
+    if (show_shelf) color("gray", 0.30) shelf();
     if (show_bat)
         color("orange", 0.18) translate([bat_x, bat_y, bat_z]) cube([bat_l, bat_w, bat_h]);
 }
@@ -265,24 +314,28 @@ module ghosts(show_bat = true) {
 // ============================================================
 //  RENDER
 // ============================================================
-part = "all";   // "all" | "fit" | "fit_nb" | "cut" | "shell" | "lid" | "print"
+part = "all";   // "all" | "fit" | "fit_nb" | "cut" | "shell" | "shelf" | "lid" | "print"
 
 if (part == "shell") {
     shell();
+} else if (part == "shelf") {
+    shelf();
 } else if (part == "lid") {
     lid();
 } else if (part == "fit") {
     shell(); ghosts();
 } else if (part == "fit_nb") {
-    shell(); ghosts(show_bat = false);
+    shell(); ghosts(show_bat = false, show_shelf = false);   // видна электроника
 } else if (part == "cut") {
     intersection() {
         union() { shell(); ghosts(); }
         translate([outer_w/2, -5, -5]) cube([outer_w, outer_h + 10, outer_d + 10]);
     }
 } else if (part == "print") {
+    // три детали на плоскости для заказа STL
     shell();
-    translate([0, outer_h + 10, -lid_z0]) lid();   // крышка рядом, на стол
+    translate([0, -(outer_h + 10), -shelf_z]) shelf();
+    translate([0,  (outer_h + 10), -lid_z0])  lid();
 } else {
     shell();
     if ($preview) ghosts();
