@@ -1,355 +1,325 @@
 // ============================================================
-//  Air Quality Monitor — корпус (v2, параметрический)
+//  Air Quality Monitor — корпус (v5, переработка с нуля)
 // ============================================================
-//  Компактный FDM-корпус под заказную печать.
-//   - крепёж плат: угловые ШТЫРЬКИ с защёлкивающим язычком
-//     (плата вставляется и фиксируется, без клея);
-//   - SCD41 в отдельной ВЕНТИЛИРУЕМОЙ КАМЕРЕ (перегородка
-//     отделяет датчик от внутреннего тёплого воздуха; дырки —
-//     прямо в комнату → честный замер CO2/температуры);
-//   - задняя крышка — обычный SNAP-FIT (язычки в окошки стенок);
-//   - реальные тела модулей (ghosts) для проверки посадки.
+//  Горизонтальный корпус. Экран слева, 1 кнопка справа.
+//  Датчик SCD41 сенсором в отверстие лица (мембрана дышит комнатой).
+//  Доступ к выключателю батарей — внутри отсека (за крышкой).
+//  В модели — РЕАЛЬНЫЕ тела плат С ПИНАМИ И ДЮПОН-МАМА (проверка
+//  влезаемости). Рельефная надпись на верхней стенке.
 //
-//  Размеры деталей — из даташитов; TODO:verify = проверить
-//  калипером перед заказом печати (от них зависят зазоры посадок).
+//  ⚠️ Дюпон-мама на пинах ESP/SCD торчит ~13 мм → отсек электроники
+//  получается ГЛУБОКИМ. Это видно на рендере (part="fit"/"cut").
+//  Хочешь тоньше — угловые (right-angle) пины или пайка проводов
+//  напрямую; тогда уменьшить chamber_d.
 //
-//  Рендер из командной строки:
-//    openscad -D 'part="fit_nb"' -o fit.png --preview ...   (посадка плат)
-//    openscad -D 'part="print"'  -o case.stl case.scad       (STL обеих деталей)
+//  Размеры с TODO:verify — проверить калипером.
+//  Рендер: openscad -D 'part="fit"' -o fit.png --preview ...
+//          openscad -D 'part="print"' -o case.stl case.scad   (3 объекта)
 // ============================================================
 
 $fn = 32;
 
-/* ---------- Допуски / стенки ---------- */
-fit     = 0.4;   // общий зазор посадки
-wall    = 2.0;   // боковые стенки
-floor_t = 2.0;   // лицевая стенка
-lid_t   = 2.0;   // крышка
+/* ---------- Стенки / допуски ---------- */
+wall    = 2.0;
+floor_t = 2.0;
+lid_t   = 2.0;
+fit     = 0.4;
 
-/* ---------- Компоненты (TODO:verify калипером) ---------- */
-bat_l = 70;  bat_w = 49;  bat_h = 20;          // батарейный отсек 3xAA
-epd_pcb_l = 65;  epd_pcb_w = 30.2;  epd_stack = 6;  epd_pcb_t = 1.6;  // e-Paper HAT
-epd_act_w = 48.55; epd_act_h = 23.71;          // активная зона экрана
-epd_act_off_x = 8; epd_act_off_y = 3;          // смещение зоны от края платы
-esp_l = 22.52; esp_w = 18; esp_h = 6; esp_pcb_t = 1.4;   // ESP32-S3 SuperMini
-scd_l = 21; scd_w = 21; scd_h = 8;             // SCD41 модуль
-usb_w = 9.5; usb_h = 4;                         // вырез USB-C
+/* ---------- e-Paper 2.13" (TODO:verify) ---------- */
+epd_l = 65; epd_w = 30.2; epd_t = 1.2; epd_back = 4;   // плата + компоненты сзади
+act_w = 48.55; act_h = 23.71;          // активная зона
+act_ox = 8; act_oy = 3;                // смещение зоны от края платы
+// шлейф тонкий — глубокого места не требует
 
-/* ---------- Штырьки-защёлки для плат ---------- */
-post_d      = 2.5;   // сторона штырька
-post_clear  = 0.25;  // зазор штырёк–край платы (входит без люфта, без зажима)
-lip         = 0.8;   // вылет язычка над платой
-lip_h       = 1.0;   // высота язычка
-clamp_clear = 0.1;   // зазор язычка над платой (держит, но не пережимает)
+/* ---------- Кнопка тактовая 12×12, актуатор Ø7 (TODO:verify) ---------- */
+btn      = 12;       // корпус
+btn_can  = 5;        // высота корпуса за лицом (без актуатора), TODO:verify
+act_d    = 7;        // актуатор
+btn_legs = 5;        // ноги + провода за корпусом
 
-/* ---------- Кнопки (тактовые 12×12, актуатор Ø7; стопкой по вертикали) ---------- */
-btn_body    = 12;    // корпус кнопки 12×12 мм, TODO:verify
-btn_can_h   = 5;     // высота корпуса за лицом (без актуатора), TODO:verify
-btn_act_d   = 7;     // диаметр актуатора (Ø7)
-btn_hole_d  = btn_act_d + 0.6;  // отверстие в лице под актуатор
-btn_wall    = 1.2;   // стенка гнезда
-btn_gap     = 2;     // зазор между кнопками в стопке
+/* ---------- SCD41 модуль (TODO:verify) ---------- */
+scd_l = 22; scd_w = 15; scd_t = 1.2;   // плата
+can   = 10; can_h = 7;                  // металлический сенсор (мембрана сверху)
+scd_hdr_n = 4;                          // линейка 1×4 на краю
+
+/* ---------- ESP32-S3 SuperMini (TODO:verify) ---------- */
+esp_l = 22.52; esp_w = 18; esp_h = 6;
+usb_w = 9.5; usb_h = 4;
+
+/* ---------- Разъёмы: дюпон-мама на пинах ---------- */
+hdr_h   = 6;     // высота пина над платой
+dup_h   = 13;    // длина дюпон-мама вдоль пина (торчит от платы)
+dup_w   = 2.6;   // толщина корпуса дюпона
+
+/* ---------- Глубина отсека электроники (платы + дюпоны) ---------- */
+// Главный потребитель глубины — вертикальные дюпоны на ESP/SCD.
+chamber_d = 20;  // TODO: уменьшить, если пины угловые/пайка напрямую
+
+/* ---------- Батарейный отсек 3xAA + выключатель (TODO:verify) ---------- */
+bat_l = 70; bat_w = 49; bat_h = 20;
+sw_l = 10; sw_w = 7; sw_h = 4;          // бугорок выключателя на боксе
+
+/* ---------- Крепёж плат (штырьки-защёлки) ---------- */
+post = 2.5; pclear = 0.25; lip = 0.8; lip_h = 1.0; clampc = 0.1;
 
 /* ---------- Камера SCD41 ---------- */
-cham_wall   = 1.5;  // толщина перегородки
-cham_clear  = 0.6;  // зазор перегородка–датчик
-scd_wire_w  = 6;    // вырез под кабель датчика I2C к ESP
+cham_wall = 1.5;
 
-/* ---------- Крышка: низ под губу + верх на защёлки ---------- */
-lid_clear = 0.3;    // зазор крышки в проёме
-lip_in    = 2.0;    // нависание нижней губы над краем крышки
-lip_zt    = 1.0;    // толщина губы по Z (= глубина четверти на крышке)
-lip_clear = 0.3;    // зазор заведения под губу
-tab_w     = 9;      // ширина язычка-защёлки
-tab_t     = 1.2;    // толщина плеча (тонкое → мягко гнётся, прощает допуск)
-tab_arm   = 7;      // длина плеча (вперёд по Z)
-barb_out  = 1.0;    // вылет зацепа язычка
-barb_h    = 2.5;    // высота зацепа по Z
-bead_in   = 1.2;    // вылет бусины-зацепа на стенке
-bead_z    = 1.5;    // толщина бусины по Z
+/* ---------- Полка-перегородка ---------- */
+shelf_t = 1.5; shelf_gap = 0.5; ledge_in = 2.0; ledge_t = 1.5;
+wire_w = 8; finger_d = 14; batt_rib = 1.5;
 
-/* ---------- Полка-перегородка (двухуровневая компоновка) ---------- */
-shelf_gap = 0.5;    // зазор полки над самой высокой платой (SCD41)
-shelf_t   = 1.5;    // толщина полки
-ledge_in  = 2.0;    // вылет опорной полочки внутрь (верх/низ стенки)
-ledge_t   = 1.5;    // высота опорной полочки
-wire_w    = 8;      // ширина выреза в полке под провода батареи
-finger_d  = 14;     // палец-отверстие в полке (вынуть полку)
-batt_rib  = 1.5;    // рёбра-держатели батарейного отсека по Y
+/* ---------- Крышка (низ под губу + верх на защёлки) ---------- */
+lid_clear = 0.3; lip_in = 2.0; lip_zt = 1.0; lip_clear = 0.3;
+tab_w = 9; tab_t = 1.2; tab_arm = 7; barb_out = 1.0; barb_h = 2.5;
+bead_in = 1.2; bead_z = 1.5;
 
-/* ---------- Вентиляция ---------- */
-vent_w = 1.6;       // ширина щели
-
-/* ---------- Производные ---------- */
-front_layer   = 8;                             // отсек электроники по Z
-epd_lower_gap = 2;                             // зазор экран–нижние платы
-btn_column    = 2*btn_body + btn_gap;          // высота стопки из 2 кнопок
-inner_w = max(bat_l, epd_pcb_l) + 2*fit;
-// нижняя полоса вмещает самое высокое из: ESP, SCD41, стопку кнопок
-inner_h = max(bat_w, epd_pcb_w + epd_lower_gap + max(esp_w, scd_w, btn_column)) + 2*fit;
-shelf_z = floor_t + front_layer + shelf_gap;   // низ полки-перегородки
-bat_z   = shelf_z + shelf_t;                   // низ батарейного отсека (= верх полки)
-inner_d = (bat_z - floor_t) + bat_h;           // полная глубина полости
-outer_w = inner_w + 2*wall;
-outer_h = inner_h + 2*wall;
-lid_z0  = floor_t + inner_d;                   // фронт крышки (= тыл батареи)
-outer_d = lid_z0 + lid_t;                       // крышка заподлицо
-
-// --- Позиции компонентов (Z=0 — внешняя сторона лица) ---
-epd_x = wall + (inner_w - epd_pcb_l)/2;
-epd_y = wall + inner_h - epd_pcb_w - fit;       // верхняя зона
-win_x = epd_x + epd_act_off_x;
-win_y = epd_y + epd_act_off_y;
-
-esp_x = wall + fit;                             // нижний-левый
-esp_y = wall + fit;
-
-scd_x = wall + inner_w - scd_l - fit;           // нижний-правый (камера)
-scd_y = wall + fit;
-
-// Кнопки — стопкой по центру колонки между ESP и камерой SCD41
-btn_cx     = (esp_x + esp_l + (scd_x - cham_clear - cham_wall)) / 2;
-btn_col_cy = (wall + epd_y) / 2;                // центр нижней полосы
-btn_y1     = btn_col_cy - (btn_body + btn_gap)/2;
-btn_y2     = btn_col_cy + (btn_body + btn_gap)/2;
-
-bat_x = wall + (inner_w - bat_l)/2;
-bat_y = wall + (inner_h - bat_w)/2;
-// bat_z задан выше в производных
-
-// положения язычков крышки (по X) — симметрично, выемка-палец по центру между ними
-tab_x1 = outer_w/2 - 16;
-tab_x2 = outer_w/2 + 16;
+/* ---------- Вентиляция / надпись ---------- */
+vent_w = 1.6;
+label  = "CO2";
 
 // ============================================================
-//  Базовые вырезы
+//  Производная компоновка (лицо: X — ширина, Y — высота, Z — глубина)
+// ============================================================
+gap = 3;                                 // зазор экран–кнопка
+// верхняя полоса: экран + кнопка; нижняя: ESP + SCD
+top_band = max(epd_w, btn);
+bot_band = max(esp_w, scd_w);
+inner_w  = max(bat_l, epd_l + gap + btn + 2) + 2*fit;
+inner_h  = max(bat_w, top_band + 2 + bot_band) + 2*fit;
+outer_w  = inner_w + 2*wall;
+outer_h  = inner_h + 2*wall;
+
+shelf_z = floor_t + chamber_d + shelf_gap;
+bat_z   = shelf_z + shelf_t;
+inner_d = (bat_z - floor_t) + bat_h;
+lid_z0  = floor_t + inner_d;
+outer_d = lid_z0 + lid_t;
+
+// --- Позиции (Z=0 — внешняя сторона лица) ---
+// e-Paper: верх-лево, прижата к лицу (экран в окно)
+epd_x = wall + fit;
+epd_y = wall + inner_h - epd_w - fit;
+win_x = epd_x + act_ox;
+win_y = epd_y + act_oy;
+
+// Кнопка: верх-право, по центру верхней полосы
+btn_cx = wall + epd_l + gap + btn/2 + fit;
+btn_cy = epd_y + epd_w/2;
+
+// ESP: низ-лево
+esp_x = wall + fit;
+esp_y = wall + fit;
+
+// SCD: низ-право, сенсор в отверстие лица
+scd_x = wall + inner_w - scd_l - fit;
+scd_y = wall + fit;
+can_cx = scd_x + scd_l/2;                // центр сенсора (предположительно центр платы)
+can_cy = scd_y + scd_w/2;
+
+// Батарея: по центру; выключатель к тыльной грани (к крышке)
+bat_x = wall + (inner_w - bat_l)/2;
+bat_y = wall + (inner_h - bat_w)/2;
+
+// ============================================================
+//  ТЕЛА МОДУЛЕЙ + ПИНЫ + ДЮПОН (ghosts, в STL не идут)
+// ============================================================
+// Линейка пинов с дюпон-мама, торчит в +Z от платы, начиная с z0.
+module header_dupont(x0, y0, z0, n) {
+    pitch = 2.54;
+    for (i = [0:n-1])
+        translate([x0 + i*pitch, y0, z0]) {
+            color("silver") cylinder(d = 0.64, h = hdr_h);          // пин
+            color("dimgray") translate([-pitch/2, -dup_w/2, hdr_h - dup_h + 2])
+                cube([pitch, dup_w, dup_h]);                         // дюпон-мама
+        }
+}
+
+module ghosts(show_bat = true, show_shelf = true) {
+    // e-Paper (плата + экран + компоненты сзади + тонкий шлейф)
+    color("green", 0.5) translate([epd_x, epd_y, floor_t]) cube([epd_l, epd_w, epd_t]);
+    color("dimgray", 0.5) translate([epd_x+2, epd_y+2, floor_t+epd_t]) cube([epd_l-4, epd_w-4, epd_back]);
+    color("white", 0.6) translate([win_x, win_y, -0.1]) cube([act_w, act_h, floor_t+0.2]);
+
+    // ESP32 + дюпоны на двух длинных краях
+    color("blue", 0.5) translate([esp_x, esp_y, floor_t]) cube([esp_l, esp_w, esp_h]);
+    header_dupont(esp_x + 2, esp_y + 1.5,        floor_t + esp_h, 6);
+    header_dupont(esp_x + 2, esp_y + esp_w - 1.5, floor_t + esp_h, 6);
+
+    // SCD41: плата на глубине can_h, сенсор смотрит в лицо (-Z), пины 1×4 в +Z
+    color("teal", 0.5) translate([scd_x, scd_y, floor_t + can_h]) cube([scd_l, scd_w, scd_t]);
+    color("silver") translate([can_cx - can/2, can_cy - can/2, floor_t]) cube([can, can, can_h]); // сенсор
+    header_dupont(scd_x + scd_l - 2, scd_y + scd_w/2 - (scd_hdr_n*2.54)/2, floor_t + can_h + scd_t, scd_hdr_n);
+
+    // Кнопка: корпус + актуатор (в лицо) + ноги/провода сзади
+    color("black", 0.6) translate([btn_cx - btn/2, btn_cy - btn/2, floor_t]) cube([btn, btn, btn_can]);
+    color("dimgray") translate([btn_cx, btn_cy, -3]) cylinder(d = act_d, h = btn_can + 3);
+    color("dimgray", 0.6) translate([btn_cx - btn/2, btn_cy - btn/2, floor_t + btn_can]) cube([btn, btn, btn_legs]);
+
+    // Полка
+    if (show_shelf) color("gray", 0.3) shelf();
+    // Батарея + бугорок выключателя у тыла (к крышке)
+    if (show_bat) {
+        color("orange", 0.18) translate([bat_x, bat_y, bat_z]) cube([bat_l, bat_w, bat_h]);
+        color("red", 0.4) translate([bat_x + bat_l/2 - sw_l/2, bat_y + 2, bat_z + bat_h])
+            cube([sw_l, sw_w, sw_h]);   // выключатель смотрит к крышке
+    }
+}
+
+// ============================================================
+//  Вырезы и фичи корпуса
 // ============================================================
 module cavity_cut() {
     translate([wall, wall, floor_t]) cube([inner_w, inner_h, outer_d]);
 }
 module window_cut() {
-    translate([win_x, win_y, -1]) cube([epd_act_w, epd_act_h, floor_t + 2]);
+    translate([win_x, win_y, -1]) cube([act_w, act_h, floor_t + 2]);
 }
-module buttons_cut() {
-    translate([btn_cx, btn_y1, -1]) cylinder(d = btn_hole_d, h = floor_t + 2);
-    translate([btn_cx, btn_y2, -1]) cylinder(d = btn_hole_d, h = floor_t + 2);
+module button_hole() {
+    translate([btn_cx, btn_cy, -1]) cylinder(d = act_d + 0.6, h = floor_t + 2);
+}
+module scd_port() {
+    translate([can_cx, can_cy, -1]) cylinder(d = can + 1, h = floor_t + 2);  // сенсор в лицо
 }
 module usb_cut() {
     translate([-1, esp_y + esp_w/2 - usb_w/2, floor_t + (esp_h - usb_h)/2])
         cube([wall + 3, usb_w, usb_h]);
 }
-// Две вентиляции у SCD41: правая стенка + нижняя стенка.
+// Вторая вентиляция (сквозняк) — щели в правой стенке у датчика
 module vents_cut() {
     for (i = [0:2])
-        translate([wall + inner_w - 1, scd_y + 3 + i*5, floor_t + 1.5])
-            cube([wall + 2, vent_w, 5]);
-    for (i = [0:2])
-        translate([scd_x + 3, -1, floor_t + 1.5 + i*2.2])
-            cube([scd_l - 6, wall + 2, vent_w]);
+        translate([wall + inner_w - 1, scd_y + 3 + i*4, floor_t + 2])
+            cube([wall + 2, vent_w, 6]);
 }
 
-// ============================================================
-//  Штырьки-защёлки (крепёж плат без клея)
-// ============================================================
-// (cx,cy) — центр штырька; axis 0=язычок вдоль X, 1=вдоль Y;
-// dir = в какую сторону смотрит язычок (+1/-1); clamp_t = толщина платы.
-module retain_post(cx, cy, axis, dir, clamp_t) {
-    z_lip = floor_t + clamp_t + clamp_clear;   // язычок чуть выше платы → не пережимает
-    h = z_lip + lip_h - floor_t;
-    translate([cx - post_d/2, cy - post_d/2, floor_t]) cube([post_d, post_d, h]);
-    if (axis == 0) {
-        lx = (dir > 0) ? cx + post_d/2 : cx - post_d/2 - lip;
-        translate([lx, cy - post_d/2, z_lip]) cube([lip, post_d, lip_h]);
-    } else {
-        ly = (dir > 0) ? cy + post_d/2 : cy - post_d/2 - lip;
-        translate([cx - post_d/2, ly, z_lip]) cube([post_d, lip, lip_h]);
+// Гнездо кнопки: рамка 12×12 + 2 язычка прижимают корпус к лицу
+module button_mount() {
+    h = btn_can + clampc + lip_h;
+    translate([btn_cx, btn_cy, floor_t]) {
+        difference() {
+            translate([-(btn/2+wall), -(btn/2+wall), 0]) cube([btn+2*wall, btn+2*wall, h]);
+            translate([-btn/2, -btn/2, -1]) cube([btn, btn, h+2]);
+        }
+        translate([-btn/2, btn/2 - lip, btn_can+clampc]) cube([btn, lip, lip_h]);
+        translate([-btn/2, -btn/2,      btn_can+clampc]) cube([btn, lip, lip_h]);
     }
 }
 
-module posts() {
-    // e-Paper: по 2 штырька в ЗАЗОРАХ до левой и правой стенок (по центру зазора,
-    // чтобы не вылезать за габарит). Язычки внутрь по X. Верх держит верхняя стенка.
-    exl = (wall + epd_x) / 2;                              // центр левого зазора
-    exr = (epd_x + epd_pcb_l + wall + inner_w) / 2;        // центр правого зазора
-    ey1 = epd_y + 5;  ey2 = epd_y + epd_pcb_w - 5;
-    retain_post(exl, ey1, 0, +1, epd_pcb_t);
-    retain_post(exl, ey2, 0, +1, epd_pcb_t);
-    retain_post(exr, ey1, 0, -1, epd_pcb_t);
-    retain_post(exr, ey2, 0, -1, epd_pcb_t);
-
-    // ESP32: штырьки ТОЛЬКО на обращённых в полость краях (верх + право).
-    // Низ и лево у стенок (места нет) — там фиксируют стенки + полка сверху.
-    eyt = esp_y + esp_w + post_clear + post_d/2;           // верхний край (в полость)
-    ex1 = esp_x + 4;  ex2 = esp_x + esp_l - 4;
-    retain_post(ex1, eyt, 1, -1, esp_pcb_t);
-    retain_post(ex2, eyt, 1, -1, esp_pcb_t);
+// Сиденье SCD41: плата опирается на САМ СЕНСОР (он стоит в отверстии лица как
+// стойка высотой can_h). Камера локализует плату по бокам; 2 язычка от верхней
+// перегородки камеры прижимают плату, чтобы сенсор не вышел из отверстия.
+module scd_seat() {
+    zt  = floor_t + can_h + scd_t + clampc;   // чуть выше платы
+    y_w = scd_y + scd_w + 0.6;                // внутренняя грань верхней перегородки
+    for (x = [scd_x + 3, scd_x + scd_l - 3])
+        translate([x - 2, scd_y + scd_w - lip, zt])
+            cube([4, (y_w + 0.5) - (scd_y + scd_w - lip), lip_h]);
 }
 
-// ============================================================
-//  Камера SCD41 (перегородки слева и сверху; справа/снизу — внешние
-//  стенки с вентиляцией). Датчик дышит комнатой, отрезан от тёплого
-//  внутреннего воздуха. Удерживается камерой + прижимом батареи.
-// ============================================================
+// Камера SCD41: перегородки (лево/верх) + вырез под кабель к ESP
 module scd_chamber() {
-    ch_h = shelf_z - floor_t;                 // до низа полки (заодно опора полки)
-    x_in = scd_x - cham_clear;                // правая грань левой перегородки
-    y_in = scd_y + scd_w + cham_clear;        // нижняя грань верхней перегородки
+    ch_h = shelf_z - floor_t;
+    x_in = scd_x - 0.6;
+    y_in = scd_y + scd_w + 0.6;
     difference() {
         union() {
-            // левая перегородка
-            translate([x_in - cham_wall, wall, floor_t])
-                cube([cham_wall, (y_in + cham_wall) - wall, ch_h]);
-            // верхняя перегородка
-            translate([x_in - cham_wall, y_in, floor_t])
-                cube([(wall + inner_w) - (x_in - cham_wall), cham_wall, ch_h]);
+            translate([x_in - cham_wall, wall, floor_t]) cube([cham_wall, (y_in+cham_wall)-wall, ch_h]);
+            translate([x_in - cham_wall, y_in, floor_t]) cube([(wall+inner_w)-(x_in-cham_wall), cham_wall, ch_h]);
         }
-        // ВЫРЕЗ под кабель датчика (I2C к ESP) — в левой перегородке, у верха.
-        // Без него камера запечатана и провода датчика не выйдут.
-        translate([x_in - cham_wall - 1, y_in - 1 - scd_wire_w, floor_t + ch_h - 5])
-            cube([cham_wall + 2, scd_wire_w, 5.5]);
+        translate([x_in - cham_wall - 1, y_in - 1 - 6, floor_t + ch_h - 6]) cube([cham_wall+2, 6, 6.5]);
     }
 }
 
-// Гнёзда под тактовые кнопки на внутренней стороне лица (рамка-локатор).
-// Кнопка вставляется актуатором к отверстию, корпус упирается в лицо.
-module button_mounts() {
-    h = btn_can_h + clamp_clear + lip_h;
-    for (by = [btn_y1, btn_y2])
-        translate([btn_cx, by, floor_t]) {
-            // 4-стенное гнездо под корпус кнопки 12×12
-            difference() {
-                translate([-(btn_body/2 + btn_wall), -(btn_body/2 + btn_wall), 0])
-                    cube([btn_body + 2*btn_wall, btn_body + 2*btn_wall, h]);
-                translate([-btn_body/2, -btn_body/2, -1])
-                    cube([btn_body, btn_body, h + 2]);
-            }
-            // 2 язычка (верх/низ) ПРИЖИМАЮТ корпус кнопки к лицу — без них
-            // нажатие просто продавит кнопку внутрь корпуса
-            translate([-btn_body/2, btn_body/2 - lip, btn_can_h + clamp_clear])
-                cube([btn_body, lip, lip_h]);
-            translate([-btn_body/2, -btn_body/2, btn_can_h + clamp_clear])
-                cube([btn_body, lip, lip_h]);
-        }
-}
-
-// ============================================================
-//  Удержание крышки (добавляемые элементы на корпусе)
-// ============================================================
-// Нижняя сплошная губа: под неё внахлёст заводится нижний край крышки.
-module bottom_lip() {
-    translate([wall + 4, wall, outer_d - lip_zt])
-        cube([inner_w - 8, lip_in, lip_zt]);
-}
-// Верхние бусины-зацепы (внутренние, без наружных дырок) — за них щёлкают язычки.
-module top_beads() {
-    bz = lid_z0 - tab_arm + barb_h;            // нижняя грань бусины ловит верх зацепа
-    for (tx = [tab_x1, tab_x2])
-        translate([tx - tab_w/2 - 0.5, wall + inner_h - bead_in, bz])
-            cube([tab_w + 1, bead_in, bead_z]);
-}
-
-// Опорные полочки под полку-перегородку (на верхней и нижней стенках).
-// Только в зонах, где платы их не задевают (над экраном / над ESP, мимо SCD).
+// Опоры полки (верхняя стенка во всю ширину; нижняя — слева, мимо камеры SCD)
 module shelf_ledges() {
-    // верхняя стенка — во всю ширину (над экраном, Z экрана ниже)
-    translate([wall, wall + inner_h - ledge_in, shelf_z - ledge_t])
-        cube([inner_w, ledge_in, ledge_t]);
-    // нижняя стенка — слева до зоны SCD (над ESP); справа полку держит камера SCD41
-    translate([wall, wall, shelf_z - ledge_t])
-        cube([scd_x - 2 - wall, ledge_in, ledge_t]);
+    translate([wall, wall + inner_h - ledge_in, shelf_z - ledge_t]) cube([inner_w, ledge_in, ledge_t]);
+    translate([wall, wall, shelf_z - ledge_t]) cube([scd_x - 2 - wall, ledge_in, ledge_t]);
+}
+module bottom_lip() {
+    translate([wall + 4, wall, outer_d - lip_zt]) cube([inner_w - 8, lip_in, lip_zt]);
+}
+module top_beads() {
+    bz = lid_z0 - tab_arm + barb_h;
+    for (tx = [outer_w/2 - 16, outer_w/2 + 16])
+        translate([tx - tab_w/2 - 0.5, wall + inner_h - bead_in, bz]) cube([tab_w+1, bead_in, bead_z]);
+}
+
+// Рельефная надпись на верхней стенке (выпуклая, вросшая в стенку → один объект)
+module emboss() {
+    translate([outer_w/2, outer_h - 0.5, outer_d * 0.45])
+        rotate([-90, 0, 0])
+            linear_extrude(1.1)        // от y=outer_h-0.5 (внутри) до +0.6 наружу
+                text(label, size = 9, halign = "center", valign = "center");
 }
 
 // ============================================================
 //  Корпус
 // ============================================================
 module shell() {
-    difference() {
-        union() {
-            difference() {
-                cube([outer_w, outer_h, outer_d]);
-                cavity_cut();
+    union() {
+        difference() {
+            union() {
+                difference() {
+                    cube([outer_w, outer_h, outer_d]);
+                    cavity_cut();
+                }
+                scd_chamber();
+                button_mount();
+                scd_seat();
+                shelf_ledges();
+                bottom_lip();
+                top_beads();
             }
-            posts();
-            scd_chamber();
-            button_mounts();
-            shelf_ledges();
-            bottom_lip();
-            top_beads();
+            window_cut();
+            button_hole();
+            scd_port();
+            usb_cut();
+            vents_cut();
         }
-        window_cut();
-        buttons_cut();
-        usb_cut();
-        vents_cut();
+        // надпись выпуклая — добавляем поверх (не вычитаем)
+        emboss();
     }
 }
 
 // ============================================================
-//  Полка-перегородка (уровень 2): дно батарейного отсека,
-//  закрывает электронику. Лежит на полочках, вынимается за палец.
+//  Полка-перегородка
 // ============================================================
 module shelf() {
     cl = 0.4;
     difference() {
         union() {
-            translate([wall + cl, wall + cl, shelf_z])
-                cube([inner_w - 2*cl, inner_h - 2*cl, shelf_t]);
-            // рёбра-держатели батарейного отсека по Y (центрируют его).
-            // ВНУТРИ плиты (не выходят за края, иначе полка упрётся в стенки).
-            translate([bat_x + 3, bat_y - batt_rib, shelf_z + shelf_t])
-                cube([bat_l - 6, batt_rib, 3]);
-            translate([bat_x + 3, bat_y + bat_w, shelf_z + shelf_t])
-                cube([bat_l - 6, batt_rib, 3]);
+            translate([wall + cl, wall + cl, shelf_z]) cube([inner_w - 2*cl, inner_h - 2*cl, shelf_t]);
+            // рёбра-держатели батареи (по Y), внутри плиты
+            translate([bat_x + 3, bat_y - batt_rib, shelf_z + shelf_t]) cube([bat_l - 6, batt_rib, 3]);
+            translate([bat_x + 3, bat_y + bat_w,    shelf_z + shelf_t]) cube([bat_l - 6, batt_rib, 3]);
+            // рёбра-держатели батареи (по X) — т.к. корпус шире батареи
+            translate([bat_x - batt_rib, bat_y + 3, shelf_z + shelf_t]) cube([batt_rib, bat_w - 6, 3]);
+            translate([bat_x + bat_l,    bat_y + 3, shelf_z + shelf_t]) cube([batt_rib, bat_w - 6, 3]);
         }
-        // вырез под провода батареи (нижний-левый, вниз к ESP)
-        translate([wall + 5, wall + cl - 1, shelf_z - 1])
-            cube([wire_w, 6, shelf_t + 2]);
-        // палец-отверстие — поддеть и вынуть полку
-        translate([outer_w/2, wall + inner_h/2, shelf_z - 1])
-            cylinder(d = finger_d, h = shelf_t + 2);
+        translate([wall + 5, wall + cl - 1, shelf_z - 1]) cube([wire_w, 6, shelf_t + 2]);   // провода
+        translate([outer_w/2, wall + inner_h/2, shelf_z - 1]) cylinder(d = finger_d, h = shelf_t + 2);
     }
 }
 
 // ============================================================
-//  Крышка: низ под губу (без гибки) + верх на 2 язычка-защёлки
+//  Крышка (низ под губу + 2 язычка-защёлки сверху)
 // ============================================================
-// Верхний язычок: плечо вперёд по Z + зацеп наружу (+Y) под бусину стенки.
 module top_tab(tx) {
-    y_edge = wall + inner_h - lid_clear;       // верхний край плиты
-    translate([tx - tab_w/2, y_edge - tab_t, lid_z0 - tab_arm])
-        cube([tab_w, tab_t, tab_arm]);                       // плечо
-    translate([tx - tab_w/2, y_edge, lid_z0 - tab_arm])
-        cube([tab_w, barb_out, barb_h]);                     // зацеп наружу
+    y_edge = wall + inner_h - lid_clear;
+    translate([tx - tab_w/2, y_edge - tab_t, lid_z0 - tab_arm]) cube([tab_w, tab_t, tab_arm]);
+    translate([tx - tab_w/2, y_edge, lid_z0 - tab_arm]) cube([tab_w, barb_out, barb_h]);
 }
-
 module lid() {
-    notch_d = 12;
     difference() {
         union() {
-            // плита: низ доведён почти до стенки (под губу), верх с зазором
             translate([wall + lid_clear, wall + lip_clear, lid_z0])
-                cube([inner_w - 2*lid_clear,
-                      inner_h - lip_clear - lid_clear, lid_t]);
-            for (tx = [tab_x1, tab_x2]) top_tab(tx);
+                cube([inner_w - 2*lid_clear, inner_h - lip_clear - lid_clear, lid_t]);
+            for (tx = [outer_w/2 - 16, outer_w/2 + 16]) top_tab(tx);
         }
-        // четверть на нижнем крае — под нижнюю губу (получается заподлицо)
         translate([-1, wall - 1, outer_d - lip_zt])
             cube([outer_w + 2, (wall + lip_in + lip_clear) - (wall - 1), lip_zt + 1]);
-        // палец-выемка на верхнем крае — поддеть для снятия
-        translate([outer_w/2, wall + inner_h, outer_d + 0.5])
-            rotate([90, 0, 0]) cylinder(d = notch_d, h = 8, center = true);
+        translate([outer_w/2, wall + inner_h, outer_d + 0.5]) rotate([90,0,0]) cylinder(d = 12, h = 8, center = true);
     }
-}
-
-// ============================================================
-//  Тела модулей (для проверки посадки; в STL не идут)
-// ============================================================
-module ghosts(show_bat = true, show_shelf = true) {
-    color("green", 0.45) translate([epd_x, epd_y, floor_t]) cube([epd_pcb_l, epd_pcb_w, epd_stack]);
-    color("blue",  0.45) translate([esp_x, esp_y, floor_t]) cube([esp_l, esp_w, esp_h]);
-    color("red",   0.55) translate([scd_x, scd_y, floor_t]) cube([scd_l, scd_w, scd_h]);
-    if (show_shelf) color("gray", 0.30) shelf();
-    if (show_bat)
-        color("orange", 0.18) translate([bat_x, bat_y, bat_z]) cube([bat_l, bat_w, bat_h]);
 }
 
 // ============================================================
@@ -357,28 +327,22 @@ module ghosts(show_bat = true, show_shelf = true) {
 // ============================================================
 part = "all";   // "all" | "fit" | "fit_nb" | "cut" | "shell" | "shelf" | "lid" | "print"
 
-if (part == "shell") {
-    shell();
-} else if (part == "shelf") {
-    shelf();
-} else if (part == "lid") {
-    lid();
-} else if (part == "fit") {
-    shell(); ghosts();
-} else if (part == "fit_nb") {
-    shell(); ghosts(show_bat = false, show_shelf = false);   // видна электроника
-} else if (part == "cut") {
+if (part == "shell") shell();
+else if (part == "shelf") shelf();
+else if (part == "lid") lid();
+else if (part == "fit") { shell(); ghosts(); }
+else if (part == "fit_nb") { shell(); ghosts(show_bat=false, show_shelf=false); }
+else if (part == "cut") {
     intersection() {
         union() { shell(); ghosts(); }
-        translate([outer_w/2, -5, -5]) cube([outer_w, outer_h + 10, outer_d + 10]);
+        translate([outer_w/2, -5, -5]) cube([outer_w, outer_h+10, outer_d+10]);
     }
 } else if (part == "print") {
-    // три детали на плоскости для заказа STL
     shell();
-    translate([0, -(outer_h + 10), -shelf_z]) shelf();
-    translate([0,  (outer_h + 10), -lid_z0])  lid();
+    translate([0, -(outer_h + 8), -shelf_z]) shelf();
+    translate([0,  (outer_h + 8), -lid_z0])  lid();
 } else {
     shell();
     if ($preview) ghosts();
-    translate([0, 0, 16]) lid();                    // explode назад
+    translate([0, 0, 18]) lid();
 }
