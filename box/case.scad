@@ -255,7 +255,7 @@ module shell() {
             }
             posts();
             scd_chamber();
-            button_mounts();
+            // button_mounts();  // TODO: переделать под выбранный тип кнопок (рамка не держала)
             shelf_ledges();
             bottom_lip();
             top_beads();
@@ -277,11 +277,12 @@ module shelf() {
         union() {
             translate([wall + cl, wall + cl, shelf_z])
                 cube([inner_w - 2*cl, inner_h - 2*cl, shelf_t]);
-            // рёбра-держатели батарейного отсека по Y (центрируют его)
-            translate([bat_x - 0.5, bat_y - batt_rib - 0.5, shelf_z + shelf_t])
-                cube([bat_l + 1, batt_rib, 3]);
-            translate([bat_x - 0.5, bat_y + bat_w + 0.5, shelf_z + shelf_t])
-                cube([bat_l + 1, batt_rib, 3]);
+            // рёбра-держатели батарейного отсека по Y (центрируют его).
+            // ВНУТРИ плиты (не выходят за края, иначе полка упрётся в стенки).
+            translate([bat_x + 3, bat_y - batt_rib, shelf_z + shelf_t])
+                cube([bat_l - 6, batt_rib, 3]);
+            translate([bat_x + 3, bat_y + bat_w, shelf_z + shelf_t])
+                cube([bat_l - 6, batt_rib, 3]);
         }
         // вырез под провода батареи (нижний-левый, вниз к ESP)
         translate([wall + 5, wall + cl - 1, shelf_z - 1])
