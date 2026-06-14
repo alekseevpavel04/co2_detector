@@ -124,15 +124,18 @@ module vents_y(y, x0, z0, nx, nz) {
                     cylinder(d = vent_d, h = wall + 2);
 }
 
-// 4 угловых ушка (cylinder в каждом внешнем углу).
-module corner_ears(z0, h, hole_d) {
+// 4 сплошных угловых ушка (cylinder в каждом внешнем углу).
+module corner_solid(z0, h) {
     pts = [[0,0],[outer_w,0],[0,outer_h],[outer_w,outer_h]];
     for (p = pts)
-        translate([p[0], p[1], z0])
-            difference() {
-                cylinder(r = ear_r, h = h);
-                translate([0,0,-1]) cylinder(d = hole_d, h = h + 2);
-            }
+        translate([p[0], p[1], z0]) cylinder(r = ear_r, h = h);
+}
+
+// 4 сквозных отверстия в углах (под винт / пилот).
+module corner_drill(z0, h, d) {
+    pts = [[0,0],[outer_w,0],[0,outer_h],[outer_w,outer_h]];
+    for (p = pts)
+        translate([p[0], p[1], z0]) cylinder(d = d, h = h);
 }
 
 // ============================================================
@@ -142,13 +145,16 @@ module shell() {
     difference() {
         union() {
             cube([outer_w, outer_h, outer_d]);
-            // стойки под винты крышки (в углах, у тыла)
-            corner_ears(outer_d - ear_h, ear_h, ear_pilot_d);
+            // сплошные стойки под винты крышки (в углах, у тыла)
+            corner_solid(outer_d - ear_h, ear_h);
         }
 
         // Внутренняя полость (тыл открыт: +1 по Z за заднюю грань)
         translate([wall, wall, floor_t])
             cube([inner_w, inner_h, inner_d + 1]);
+
+        // Пилотные отверстия в стойках (самонарезающий M2)
+        corner_drill(outer_d - ear_h - 1, ear_h + 2, ear_pilot_d);
 
         // Окно экрана
         translate([win_x, win_y, -1])
@@ -181,8 +187,11 @@ module shell() {
 // ============================================================
 module lid() {
     difference() {
-        cube([outer_w, outer_h, lid_t]);
-        corner_ears(-1, lid_t + 2, ear_hole_d);
+        union() {
+            cube([outer_w, outer_h, lid_t]);
+            corner_solid(0, lid_t);          // ушки в тон корпусу
+        }
+        corner_drill(-1, lid_t + 2, ear_hole_d);  // сквозные под винт
     }
 }
 
@@ -207,13 +216,18 @@ module components_preview() {
 // ============================================================
 //  RENDER — что показать/экспортировать
 // ============================================================
-// Сборка целиком (превью): корпус + крышка рядом + детали-призраки.
-shell();
-if ($preview) components_preview();
+// Переключатель детали. В GUI оставь "all" (видишь обе детали + призраки).
+// Для экспорта STL рендерю из командной строки:
+//   openscad -D 'part="shell"' -o case_shell.stl case.scad
+//   openscad -D 'part="lid"'   -o case_lid.stl   case.scad
+part = "all";   // "all" | "shell" | "lid"
 
-// Крышка вынесена вбок, чтобы видеть обе детали.
-translate([outer_w + 10, 0, 0]) lid();
-
-// Для экспорта STL по отдельности — закомментируй строки выше и оставь одно:
-//   shell();
-//   lid();
+if (part == "shell") {
+    shell();
+} else if (part == "lid") {
+    lid();
+} else {                         // "all" — общий вид
+    shell();
+    if ($preview) components_preview();
+    translate([outer_w + 10, 0, 0]) lid();   // крышка вынесена вбок
+}
