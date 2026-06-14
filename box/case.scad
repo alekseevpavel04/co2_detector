@@ -34,7 +34,6 @@ epd_act_off_x = 8; epd_act_off_y = 3;          // смещение зоны от
 esp_l = 22.52; esp_w = 18; esp_h = 6; esp_pcb_t = 1.4;   // ESP32-S3 SuperMini
 scd_l = 21; scd_w = 21; scd_h = 8;             // SCD41 модуль
 usb_w = 9.5; usb_h = 4;                         // вырез USB-C
-btn_hole_d = 4; btn_spacing = 16;              // кнопки
 
 /* ---------- Штырьки-защёлки для плат ---------- */
 post_d      = 2.5;   // сторона штырька
@@ -43,10 +42,13 @@ lip         = 0.8;   // вылет язычка над платой
 lip_h       = 1.0;   // высота язычка
 clamp_clear = 0.1;   // зазор язычка над платой (держит, но не пережимает)
 
-/* ---------- Кнопки (тактовые, гнездо на внутренней стороне лица) ---------- */
-btn_body    = 6.0;   // сторона корпуса кнопки, TODO:verify
-btn_body_h  = 3.5;   // высота корпуса кнопки за лицом, TODO:verify
+/* ---------- Кнопки (тактовые 12×12, актуатор Ø7; стопкой по вертикали) ---------- */
+btn_body    = 12;    // корпус кнопки 12×12 мм, TODO:verify
+btn_can_h   = 5;     // высота корпуса за лицом (без актуатора), TODO:verify
+btn_act_d   = 7;     // диаметр актуатора (Ø7)
+btn_hole_d  = btn_act_d + 0.6;  // отверстие в лице под актуатор
 btn_wall    = 1.2;   // стенка гнезда
+btn_gap     = 2;     // зазор между кнопками в стопке
 
 /* ---------- Камера SCD41 ---------- */
 cham_wall   = 1.5;  // толщина перегородки
@@ -81,8 +83,10 @@ vent_w = 1.6;       // ширина щели
 /* ---------- Производные ---------- */
 front_layer   = 8;                             // отсек электроники по Z
 epd_lower_gap = 2;                             // зазор экран–нижние платы
+btn_column    = 2*btn_body + btn_gap;          // высота стопки из 2 кнопок
 inner_w = max(bat_l, epd_pcb_l) + 2*fit;
-inner_h = max(bat_w, epd_pcb_w + max(esp_w, scd_w) + epd_lower_gap) + 2*fit;
+// нижняя полоса вмещает самое высокое из: ESP, SCD41, стопку кнопок
+inner_h = max(bat_w, epd_pcb_w + epd_lower_gap + max(esp_w, scd_w, btn_column)) + 2*fit;
 shelf_z = floor_t + front_layer + shelf_gap;   // низ полки-перегородки
 bat_z   = shelf_z + shelf_t;                   // низ батарейного отсека (= верх полки)
 inner_d = (bat_z - floor_t) + bat_h;           // полная глубина полости
@@ -103,8 +107,11 @@ esp_y = wall + fit;
 scd_x = wall + inner_w - scd_l - fit;           // нижний-правый (камера)
 scd_y = wall + fit;
 
-btn_cx = outer_w/2;
-btn_y  = wall + (epd_y - wall)/2;
+// Кнопки — стопкой по центру колонки между ESP и камерой SCD41
+btn_cx     = (esp_x + esp_l + (scd_x - cham_clear - cham_wall)) / 2;
+btn_col_cy = (wall + epd_y) / 2;                // центр нижней полосы
+btn_y1     = btn_col_cy - (btn_body + btn_gap)/2;
+btn_y2     = btn_col_cy + (btn_body + btn_gap)/2;
 
 bat_x = wall + (inner_w - bat_l)/2;
 bat_y = wall + (inner_h - bat_w)/2;
@@ -124,8 +131,8 @@ module window_cut() {
     translate([win_x, win_y, -1]) cube([epd_act_w, epd_act_h, floor_t + 2]);
 }
 module buttons_cut() {
-    translate([btn_cx - btn_spacing/2, btn_y, -1]) cylinder(d = btn_hole_d, h = floor_t + 2);
-    translate([btn_cx + btn_spacing/2, btn_y, -1]) cylinder(d = btn_hole_d, h = floor_t + 2);
+    translate([btn_cx, btn_y1, -1]) cylinder(d = btn_hole_d, h = floor_t + 2);
+    translate([btn_cx, btn_y2, -1]) cylinder(d = btn_hole_d, h = floor_t + 2);
 }
 module usb_cut() {
     translate([-1, esp_y + esp_w/2 - usb_w/2, floor_t + (esp_h - usb_h)/2])
@@ -206,14 +213,23 @@ module scd_chamber() {
 // Гнёзда под тактовые кнопки на внутренней стороне лица (рамка-локатор).
 // Кнопка вставляется актуатором к отверстию, корпус упирается в лицо.
 module button_mounts() {
-    for (bx = [btn_cx - btn_spacing/2, btn_cx + btn_spacing/2])
-        translate([bx, btn_y, floor_t])
+    h = btn_can_h + clamp_clear + lip_h;
+    for (by = [btn_y1, btn_y2])
+        translate([btn_cx, by, floor_t]) {
+            // 4-стенное гнездо под корпус кнопки 12×12
             difference() {
                 translate([-(btn_body/2 + btn_wall), -(btn_body/2 + btn_wall), 0])
-                    cube([btn_body + 2*btn_wall, btn_body + 2*btn_wall, btn_body_h]);
+                    cube([btn_body + 2*btn_wall, btn_body + 2*btn_wall, h]);
                 translate([-btn_body/2, -btn_body/2, -1])
-                    cube([btn_body, btn_body, btn_body_h + 2]);
+                    cube([btn_body, btn_body, h + 2]);
             }
+            // 2 язычка (верх/низ) ПРИЖИМАЮТ корпус кнопки к лицу — без них
+            // нажатие просто продавит кнопку внутрь корпуса
+            translate([-btn_body/2, btn_body/2 - lip, btn_can_h + clamp_clear])
+                cube([btn_body, lip, lip_h]);
+            translate([-btn_body/2, -btn_body/2, btn_can_h + clamp_clear])
+                cube([btn_body, lip, lip_h]);
+        }
 }
 
 // ============================================================
@@ -255,7 +271,7 @@ module shell() {
             }
             posts();
             scd_chamber();
-            // button_mounts();  // TODO: переделать под выбранный тип кнопок (рамка не держала)
+            button_mounts();
             shelf_ledges();
             bottom_lip();
             top_beads();
