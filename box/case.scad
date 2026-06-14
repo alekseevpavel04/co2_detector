@@ -37,15 +37,21 @@ usb_w = 9.5; usb_h = 4;                         // вырез USB-C
 btn_hole_d = 4; btn_spacing = 16;              // кнопки
 
 /* ---------- Штырьки-защёлки для плат ---------- */
-post_d      = 3.0;   // сторона штырька
+post_d      = 2.5;   // сторона штырька
 post_clear  = 0.25;  // зазор штырёк–край платы (входит без люфта, без зажима)
 lip         = 0.8;   // вылет язычка над платой
 lip_h       = 1.0;   // высота язычка
 clamp_clear = 0.1;   // зазор язычка над платой (держит, но не пережимает)
 
+/* ---------- Кнопки (тактовые, гнездо на внутренней стороне лица) ---------- */
+btn_body    = 6.0;   // сторона корпуса кнопки, TODO:verify
+btn_body_h  = 3.5;   // высота корпуса кнопки за лицом, TODO:verify
+btn_wall    = 1.2;   // стенка гнезда
+
 /* ---------- Камера SCD41 ---------- */
 cham_wall   = 1.5;  // толщина перегородки
 cham_clear  = 0.6;  // зазор перегородка–датчик
+scd_wire_w  = 6;    // вырез под кабель датчика I2C к ESP
 
 /* ---------- Крышка: низ под губу + верх на защёлки ---------- */
 lid_clear = 0.3;    // зазор крышки в проёме
@@ -154,21 +160,20 @@ module retain_post(cx, cy, axis, dir, clamp_t) {
 }
 
 module posts() {
-    // e-Paper: 4 штырька на левом и правом краях (язычки внутрь по X)
-    exl = epd_x - post_clear - post_d/2;
-    exr = epd_x + epd_pcb_l + post_clear + post_d/2;
-    ey1 = epd_y + 4;  ey2 = epd_y + epd_pcb_w - 4;
+    // e-Paper: по 2 штырька в ЗАЗОРАХ до левой и правой стенок (по центру зазора,
+    // чтобы не вылезать за габарит). Язычки внутрь по X. Верх держит верхняя стенка.
+    exl = (wall + epd_x) / 2;                              // центр левого зазора
+    exr = (epd_x + epd_pcb_l + wall + inner_w) / 2;        // центр правого зазора
+    ey1 = epd_y + 5;  ey2 = epd_y + epd_pcb_w - 5;
     retain_post(exl, ey1, 0, +1, epd_pcb_t);
     retain_post(exl, ey2, 0, +1, epd_pcb_t);
     retain_post(exr, ey1, 0, -1, epd_pcb_t);
     retain_post(exr, ey2, 0, -1, epd_pcb_t);
 
-    // ESP32: 4 штырька на верхнем и нижнем краях (язычки по Y; левый край — под USB)
-    eyb = esp_y - post_clear - post_d/2;
-    eyt = esp_y + esp_w + post_clear + post_d/2;
+    // ESP32: штырьки ТОЛЬКО на обращённых в полость краях (верх + право).
+    // Низ и лево у стенок (места нет) — там фиксируют стенки + полка сверху.
+    eyt = esp_y + esp_w + post_clear + post_d/2;           // верхний край (в полость)
     ex1 = esp_x + 4;  ex2 = esp_x + esp_l - 4;
-    retain_post(ex1, eyb, 1, +1, esp_pcb_t);
-    retain_post(ex2, eyb, 1, +1, esp_pcb_t);
     retain_post(ex1, eyt, 1, -1, esp_pcb_t);
     retain_post(ex2, eyt, 1, -1, esp_pcb_t);
 }
@@ -182,15 +187,33 @@ module scd_chamber() {
     ch_h = shelf_z - floor_t;                 // до низа полки (заодно опора полки)
     x_in = scd_x - cham_clear;                // правая грань левой перегородки
     y_in = scd_y + scd_w + cham_clear;        // нижняя грань верхней перегородки
-    // левая перегородка
-    translate([x_in - cham_wall, wall, floor_t])
-        cube([cham_wall, (y_in + cham_wall) - wall, ch_h]);
-    // верхняя перегородка
-    translate([x_in - cham_wall, y_in, floor_t])
-        cube([(wall + inner_w) - (x_in - cham_wall), cham_wall, ch_h]);
-    // маленький язычок сверху — придержать датчик до установки батареи
-    translate([scd_x + 2, y_in, floor_t + scd_h])
-        cube([scd_l - 4, cham_clear + lip, lip_h]);
+    difference() {
+        union() {
+            // левая перегородка
+            translate([x_in - cham_wall, wall, floor_t])
+                cube([cham_wall, (y_in + cham_wall) - wall, ch_h]);
+            // верхняя перегородка
+            translate([x_in - cham_wall, y_in, floor_t])
+                cube([(wall + inner_w) - (x_in - cham_wall), cham_wall, ch_h]);
+        }
+        // ВЫРЕЗ под кабель датчика (I2C к ESP) — в левой перегородке, у верха.
+        // Без него камера запечатана и провода датчика не выйдут.
+        translate([x_in - cham_wall - 1, y_in - 1 - scd_wire_w, floor_t + ch_h - 5])
+            cube([cham_wall + 2, scd_wire_w, 5.5]);
+    }
+}
+
+// Гнёзда под тактовые кнопки на внутренней стороне лица (рамка-локатор).
+// Кнопка вставляется актуатором к отверстию, корпус упирается в лицо.
+module button_mounts() {
+    for (bx = [btn_cx - btn_spacing/2, btn_cx + btn_spacing/2])
+        translate([bx, btn_y, floor_t])
+            difference() {
+                translate([-(btn_body/2 + btn_wall), -(btn_body/2 + btn_wall), 0])
+                    cube([btn_body + 2*btn_wall, btn_body + 2*btn_wall, btn_body_h]);
+                translate([-btn_body/2, -btn_body/2, -1])
+                    cube([btn_body, btn_body, btn_body_h + 2]);
+            }
 }
 
 // ============================================================
@@ -232,6 +255,7 @@ module shell() {
             }
             posts();
             scd_chamber();
+            button_mounts();
             shelf_ledges();
             bottom_lip();
             top_beads();
