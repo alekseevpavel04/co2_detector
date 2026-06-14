@@ -37,22 +37,28 @@ usb_w = 9.5; usb_h = 4;                         // вырез USB-C
 btn_hole_d = 4; btn_spacing = 16;              // кнопки
 
 /* ---------- Штырьки-защёлки для плат ---------- */
-post_d     = 3.0;   // сторона штырька
-post_clear = 0.3;   // зазор штырёк–край платы
-lip        = 0.8;   // вылет язычка над платой
-lip_h      = 1.0;   // высота язычка
+post_d      = 3.0;   // сторона штырька
+post_clear  = 0.25;  // зазор штырёк–край платы (входит без люфта, без зажима)
+lip         = 0.8;   // вылет язычка над платой
+lip_h       = 1.0;   // высота язычка
+clamp_clear = 0.1;   // зазор язычка над платой (держит, но не пережимает)
 
 /* ---------- Камера SCD41 ---------- */
 cham_wall   = 1.5;  // толщина перегородки
 cham_clear  = 0.6;  // зазор перегородка–датчик
 
-/* ---------- Крышка snap-fit ---------- */
+/* ---------- Крышка: низ под губу + верх на защёлки ---------- */
 lid_clear = 0.3;    // зазор крышки в проёме
-tab_w     = 8;      // ширина язычка
-tab_t     = 1.6;    // толщина плеча язычка
-tab_arm   = 6;      // длина плеча (вперёд по Z)
-barb_out  = 1.2;    // вылет зацепа в стенку
-barb_h    = 3;      // высота зацепа по Z
+lip_in    = 2.0;    // нависание нижней губы над краем крышки
+lip_zt    = 1.0;    // толщина губы по Z (= глубина четверти на крышке)
+lip_clear = 0.3;    // зазор заведения под губу
+tab_w     = 9;      // ширина язычка-защёлки
+tab_t     = 1.2;    // толщина плеча (тонкое → мягко гнётся, прощает допуск)
+tab_arm   = 7;      // длина плеча (вперёд по Z)
+barb_out  = 1.0;    // вылет зацепа язычка
+barb_h    = 2.5;    // высота зацепа по Z
+bead_in   = 1.2;    // вылет бусины-зацепа на стенке
+bead_z    = 1.5;    // толщина бусины по Z
 
 /* ---------- Вентиляция ---------- */
 vent_w = 1.6;       // ширина щели
@@ -87,9 +93,9 @@ bat_x = wall + (inner_w - bat_l)/2;
 bat_y = wall + (inner_h - bat_w)/2;
 bat_z = floor_t + front_layer;
 
-// положения язычков крышки (по X), подальше от вент-зоны SCD41 справа-снизу
-tab_x1 = wall + inner_w*0.25;
-tab_x2 = wall + inner_w*0.55;
+// положения язычков крышки (по X) — симметрично, выемка-палец по центру между ними
+tab_x1 = outer_w/2 - 16;
+tab_x2 = outer_w/2 + 16;
 
 // ============================================================
 //  Базовые вырезы
@@ -124,14 +130,15 @@ module vents_cut() {
 // (cx,cy) — центр штырька; axis 0=язычок вдоль X, 1=вдоль Y;
 // dir = в какую сторону смотрит язычок (+1/-1); clamp_t = толщина платы.
 module retain_post(cx, cy, axis, dir, clamp_t) {
-    h = clamp_t + lip_h;
+    z_lip = floor_t + clamp_t + clamp_clear;   // язычок чуть выше платы → не пережимает
+    h = z_lip + lip_h - floor_t;
     translate([cx - post_d/2, cy - post_d/2, floor_t]) cube([post_d, post_d, h]);
     if (axis == 0) {
         lx = (dir > 0) ? cx + post_d/2 : cx - post_d/2 - lip;
-        translate([lx, cy - post_d/2, floor_t + clamp_t]) cube([lip, post_d, lip_h]);
+        translate([lx, cy - post_d/2, z_lip]) cube([lip, post_d, lip_h]);
     } else {
         ly = (dir > 0) ? cy + post_d/2 : cy - post_d/2 - lip;
-        translate([cx - post_d/2, ly, floor_t + clamp_t]) cube([post_d, lip, lip_h]);
+        translate([cx - post_d/2, ly, z_lip]) cube([post_d, lip, lip_h]);
     }
 }
 
@@ -176,18 +183,19 @@ module scd_chamber() {
 }
 
 // ============================================================
-//  Snap-fit крышки: окошки в верхней и нижней стенках
+//  Удержание крышки (добавляемые элементы на корпусе)
 // ============================================================
-module lid_windows() {
-    bz0 = lid_z0 - tab_arm;                    // где сидит зацеп
-    // верхняя стенка (y high)
+// Нижняя сплошная губа: под неё внахлёст заводится нижний край крышки.
+module bottom_lip() {
+    translate([wall + 4, wall, outer_d - lip_zt])
+        cube([inner_w - 8, lip_in, lip_zt]);
+}
+// Верхние бусины-зацепы (внутренние, без наружных дырок) — за них щёлкают язычки.
+module top_beads() {
+    bz = lid_z0 - tab_arm + barb_h;            // нижняя грань бусины ловит верх зацепа
     for (tx = [tab_x1, tab_x2])
-        translate([tx - tab_w/2 - 0.4, wall + inner_h - 0.2, bz0 - 0.4])
-            cube([tab_w + 0.8, wall + 1, barb_h + 0.8]);
-    // нижняя стенка (y low)
-    for (tx = [tab_x1, tab_x2])
-        translate([tx - tab_w/2 - 0.4, -1, bz0 - 0.4])
-            cube([tab_w + 0.8, wall + 1, barb_h + 0.8]);
+        translate([tx - tab_w/2 - 0.5, wall + inner_h - bead_in, bz])
+            cube([tab_w + 1, bead_in, bead_z]);
 }
 
 // ============================================================
@@ -202,44 +210,44 @@ module shell() {
             }
             posts();
             scd_chamber();
+            bottom_lip();
+            top_beads();
         }
         window_cut();
         buttons_cut();
         usb_cut();
         vents_cut();
-        lid_windows();
     }
 }
 
 // ============================================================
-//  Крышка snap-fit
+//  Крышка: низ под губу (без гибки) + верх на 2 язычка-защёлки
 // ============================================================
-module snap_tab(tx, side) {
-    // side = +1 (верхняя стенка, зацеп +Y) | -1 (нижняя, зацеп -Y)
-    wall_y = (side > 0) ? wall + inner_h : wall;
-    arm_y  = (side > 0) ? wall_y - tab_t : wall_y;
-    barb_y = (side > 0) ? wall_y : wall_y - barb_out;
-    // плечо (вперёд по Z от плиты)
-    translate([tx - tab_w/2, arm_y, lid_z0 - tab_arm])
-        cube([tab_w, tab_t, tab_arm]);
-    // зацеп
-    translate([tx - tab_w/2, barb_y, lid_z0 - tab_arm])
-        cube([tab_w, barb_out + tab_t, barb_h]);
+// Верхний язычок: плечо вперёд по Z + зацеп наружу (+Y) под бусину стенки.
+module top_tab(tx) {
+    y_edge = wall + inner_h - lid_clear;       // верхний край плиты
+    translate([tx - tab_w/2, y_edge - tab_t, lid_z0 - tab_arm])
+        cube([tab_w, tab_t, tab_arm]);                       // плечо
+    translate([tx - tab_w/2, y_edge, lid_z0 - tab_arm])
+        cube([tab_w, barb_out, barb_h]);                     // зацеп наружу
 }
 
 module lid() {
+    notch_d = 12;
     difference() {
         union() {
-            // плита заподлицо в проёме
-            translate([wall + lid_clear, wall + lid_clear, lid_z0])
-                cube([inner_w - 2*lid_clear, inner_h - 2*lid_clear, lid_t]);
-            // язычки
-            for (tx = [tab_x1, tab_x2]) snap_tab(tx, +1);
-            for (tx = [tab_x1, tab_x2]) snap_tab(tx, -1);
+            // плита: низ доведён почти до стенки (под губу), верх с зазором
+            translate([wall + lid_clear, wall + lip_clear, lid_z0])
+                cube([inner_w - 2*lid_clear,
+                      inner_h - lip_clear - lid_clear, lid_t]);
+            for (tx = [tab_x1, tab_x2]) top_tab(tx);
         }
-        // палец-выемка на тыльной грани (поддеть для снятия)
-        translate([outer_w/2, wall + lid_clear, outer_d + 1])
-            rotate([90, 0, 0]) cylinder(d = 12, h = 6, center = true);
+        // четверть на нижнем крае — под нижнюю губу (получается заподлицо)
+        translate([-1, wall - 1, outer_d - lip_zt])
+            cube([outer_w + 2, (wall + lip_in + lip_clear) - (wall - 1), lip_zt + 1]);
+        // палец-выемка на верхнем крае — поддеть для снятия
+        translate([outer_w/2, wall + inner_h, outer_d + 0.5])
+            rotate([90, 0, 0]) cylinder(d = notch_d, h = 8, center = true);
     }
 }
 
