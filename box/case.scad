@@ -1,233 +1,257 @@
 // ============================================================
-//  Air Quality Monitor — корпус (v0, параметрический)
+//  Air Quality Monitor — корпус (v1, параметрический)
 // ============================================================
-//  Компактный FDM-корпус. Все размеры — переменные ниже.
-//  Размеры деталей взяты из даташитов; пометка TODO:verify =
-//  проверить калипером на реальной детали.
+//  Компактный FDM-корпус под заказную печать.
+//  - посадочные гнёзда-направляющие для e-Paper / ESP32 / SCD41
+//    (детали вдвигаются, при желании — на клей);
+//  - сдвижная задняя крышка с защёлкой (без винтов, заподлицо);
+//  - две рабочие вентиляции у датчика (правая + нижняя стенки);
+//  - реальные тела модулей (ghosts) для проверки посадки.
 //
-//  F5 — превью (показывает «коробки» деталей внутри: видно, влезает ли).
-//  F6 — рендер. Экспорт STL по отдельности: см. RENDER в самом низу.
+//  Размеры деталей — из даташитов; пометка TODO:verify = проверить
+//  калипером перед заказом печати (от этого зависят зазоры посадок).
 //
-//  Печать: лицевой стенкой ВНИЗ на стол (ровное окно, минимум поддержек).
+//  Рендер из командной строки:
+//    openscad -D 'part="all"'   -o all.png   --preview ...   (общий вид)
+//    openscad -D 'part="fit"'   -o fit.png   --preview ...   (посадка деталей)
+//    openscad -D 'part="print"' -o case.stl  case.scad       (STL: обе детали)
 // ============================================================
 
-$fn = 24;
+$fn = 32;
 
 /* ---------- Допуски / стенки ---------- */
-fit     = 0.4;   // зазор посадки деталей (подкрутить под свой принтер)
-wall    = 2.0;   // боковые стенки
-floor_t = 2.0;   // лицевая стенка (с окном)
-lid_t   = 2.0;   // задняя крышка
+fit      = 0.4;   // общий зазор посадки
+wall     = 2.0;   // боковые стенки
+floor_t  = 2.0;   // лицевая стенка
+lid_t    = 2.0;   // крышка
 
-/* ---------- Батарейный отсек 3xAA с выключателем (доминирует) ----------
-   TODO:verify — варианты 68..70 x 47.5..49 x 18..20 мм */
-bat_l = 70;
-bat_w = 49;
-bat_h = 20;
+/* ---------- Компоненты (TODO:verify калипером) ---------- */
+bat_l = 70;  bat_w = 49;  bat_h = 20;          // батарейный отсек 3xAA
+epd_pcb_l = 65;  epd_pcb_w = 30.2;  epd_stack = 6;   // e-Paper HAT
+epd_act_w = 48.55; epd_act_h = 23.71;          // активная зона экрана
+epd_act_off_x = 8; epd_act_off_y = 3;          // смещение зоны от края платы
+esp_l = 22.52; esp_w = 18; esp_h = 6;          // ESP32-S3 SuperMini
+scd_l = 21; scd_w = 21; scd_h = 8;             // SCD41 модуль
+usb_w = 9.5; usb_h = 4;                         // вырез USB-C
+btn_hole_d = 4; btn_spacing = 16;              // кнопки
 
-/* ---------- e-Paper Waveshare 2.13" HAT ---------- */
-epd_pcb_l = 65;      // длина платы, TODO:verify
-epd_pcb_w = 30.2;    // ширина платы, TODO:verify
-epd_stack = 6;       // высота со стеклом/FPC/разъёмом, TODO:verify
-epd_act_w = 48.55;   // активная (видимая) зона по длине
-epd_act_h = 23.71;   // активная зона по ширине
-epd_act_off_x = 8;   // смещение активной зоны от края платы по X, TODO:verify
-epd_act_off_y = 3;   // смещение активной зоны от края платы по Y, TODO:verify
+/* ---------- Гнёзда-направляющие ---------- */
+seat_rib    = 1.2;   // толщина ребра-направляющей
+seat_clear  = 0.4;   // зазор гнезда (плата легко входит)
+seat_h_epd  = 3;     // высота ребра вокруг экрана
+seat_h_small= 3;     // высота ребра для ESP32 / SCD41
 
-/* ---------- ESP32-S3 SuperMini ---------- */
-esp_l = 22.52;       // длина платы
-esp_w = 18;          // ширина платы
-esp_h = 6;           // высота с компонентами/USB, TODO:verify
-usb_w = 9.5;         // ширина выреза под USB-C, TODO:verify
-usb_h = 4;           // высота выреза под USB-C, TODO:verify
+/* ---------- Сдвижная крышка ---------- */
+rail_d      = 1.5;   // глубина паза в стенке (заезд язычка)
+slide_clear = 0.4;   // зазор скольжения по X
+lid_y_clear = 0.6;   // зазор по Y (чтобы вдвигалась)
+back_lip    = 1.0;   // задний бортик: держит крышку в Z (она утоплена на эту величину)
+detent_d    = 1.2;   // диаметр бугорка-защёлки
 
-/* ---------- SCD41 модуль ---------- TODO:verify свой модуль */
-scd_l = 21;
-scd_w = 21;
-scd_h = 8;           // с металлической крышкой сенсора
+/* ---------- Вентиляция ---------- */
+vent_w   = 1.6;   // ширина щели
 
-/* ---------- Кнопки (тактовые, в передней стенке) ---------- */
-btn_hole_d  = 4;     // отверстие под толкатель/палец
-btn_spacing = 16;    // расстояние между центрами кнопок
-
-/* ---------- Вентиляция SCD41 ---------- */
-vent_d     = 1.8;    // диаметр отверстий решётки
-vent_pitch = 3.5;    // шаг отверстий
-
-/* ---------- Крепёжные «ушки» задней крышки ---------- */
-ear_r       = 4;     // радиус ушка в углу
-ear_hole_d  = 2.2;   // сквозное в крышке (под M2)
-ear_pilot_d = 1.6;   // пилот в стойке корпуса (самонарезающий M2)
-ear_h       = 6;     // глубина стойки от тыла
-
-// ============================================================
-//  Производные габариты
-// ============================================================
-front_layer = max(epd_stack, scd_h, esp_h) + 1;     // слой электроники
-inner_w = max(bat_l, epd_pcb_l) + 2*fit;            // ширина полости
-inner_h = max(bat_w, epd_pcb_w + 18) + 2*fit;       // высота (+полоса под кнопки)
-inner_d = front_layer + 1 + bat_h;                  // глубина (+зазор перед батареей)
-
+/* ---------- Производные ---------- */
+front_layer = 8;                               // слой электроники по Z
+epd_lower_gap = 2;                             // зазор между экраном и нижними платами
+inner_w = max(bat_l, epd_pcb_l) + 2*fit;
+// высота вмещает: экран сверху + нижнюю полосу под самую высокую плату (SCD41/ESP32)
+inner_h = max(bat_w, epd_pcb_w + max(esp_w, scd_w) + epd_lower_gap) + 2*fit;
+inner_d = front_layer + bat_h;                 // полость до тыльной грани батареи
 outer_w = inner_w + 2*wall;
 outer_h = inner_h + 2*wall;
-outer_d = floor_t + inner_d;                        // тыл открыт; крышка отдельно
+lid_z0  = floor_t + inner_d;                   // фронт крышки по Z
+lid_z1  = lid_z0 + lid_t;                       // тыл плиты крышки
+outer_d = lid_z1 + back_lip;                    // общий габарит по Z (крышка утоплена)
 
-// --- Позиции деталей (в координатах корпуса; Z=0 — внешняя сторона лица) ---
-// e-Paper: верхняя зона, по центру X, прижата к верху.
+// --- Позиции компонентов (Z=0 — внешняя сторона лица) ---
 epd_x = wall + (inner_w - epd_pcb_l)/2;
-epd_y = wall + inner_h - epd_pcb_w - fit;
-epd_z = floor_t;                                    // прижата к лицу изнутри
-
-// Окно в лицевой стенке = активная зона экрана.
+epd_y = wall + inner_h - epd_pcb_w - fit;       // верхняя зона
 win_x = epd_x + epd_act_off_x;
 win_y = epd_y + epd_act_off_y;
 
-// ESP32 — нижний-левый угол, USB-C смотрит в левую стенку.
-esp_x = wall + fit;
+esp_x = wall + fit;                             // нижний-левый угол
 esp_y = wall + fit;
-esp_z = floor_t;
 
-// SCD41 — нижний-правый угол, у вентилируемой правой стенки.
-scd_x = wall + inner_w - scd_l - fit;
+scd_x = wall + inner_w - scd_l - fit;           // нижний-правый угол (у вентиляции)
 scd_y = wall + fit;
-scd_z = floor_t;
 
-// Кнопки — по центру нижней полосы, между ESP32 и SCD41.
 btn_cx = outer_w/2;
-btn_y  = wall + (epd_y - wall)/2;                   // середина нижней полосы
+btn_y  = wall + (epd_y - wall)/2;               // середина нижней полосы
 
-// Батарея — задняя полость, по центру, прижата к тылу.
 bat_x = wall + (inner_w - bat_l)/2;
 bat_y = wall + (inner_h - bat_w)/2;
-bat_z = floor_t + front_layer + 1;
+bat_z = floor_t + front_layer;                  // батарея за электроникой
 
 // ============================================================
-//  Вспомогательные модули
+//  Вырезы и фичи (модули)
 // ============================================================
 
-// Решётка из отверстий в стенке с нормалью по X (правая стенка).
-// Отверстия идут вдоль осей Y (ny шт) и Z (nz шт).
-module vents_x(x, y0, z0, ny, nz) {
-    for (j = [0:ny-1])
-        for (k = [0:nz-1])
-            translate([x - 1, y0 + j*vent_pitch, z0 + k*vent_pitch])
-                rotate([0, 90, 0])
-                    cylinder(d = vent_d, h = wall + 2);
+// Большая внутренняя полость, тыл открыт.
+module cavity_cut() {
+    translate([wall, wall, floor_t])
+        cube([inner_w, inner_h, outer_d]);     // выходит за тыл — открыто
 }
 
-// Решётка в стенке с нормалью по Y (нижняя стенка).
-module vents_y(y, x0, z0, nx, nz) {
-    for (i = [0:nx-1])
-        for (k = [0:nz-1])
-            translate([x0 + i*vent_pitch, y - 1, z0 + k*vent_pitch])
-                rotate([-90, 0, 0])
-                    cylinder(d = vent_d, h = wall + 2);
+// Рамка-гнездо вокруг footprint (4 ребра).
+module seat_frame(px, py, fw, fh, rh) {
+    translate([px, py, floor_t])
+        difference() {
+            translate([-seat_rib, -seat_rib, 0])
+                cube([fw + 2*seat_rib, fh + 2*seat_rib, rh]);
+            translate([0, 0, -1]) cube([fw, fh, rh + 2]);
+        }
 }
 
-// 4 сплошных угловых ушка (cylinder в каждом внешнем углу).
-module corner_solid(z0, h) {
-    pts = [[0,0],[outer_w,0],[0,outer_h],[outer_w,outer_h]];
-    for (p = pts)
-        translate([p[0], p[1], z0]) cylinder(r = ear_r, h = h);
+// Гнёзда всех трёх плат.
+module seats() {
+    // e-Paper — полная рамка (экран ляжет к окну изнутри)
+    seat_frame(epd_x - seat_clear, epd_y - seat_clear,
+               epd_pcb_l + 2*seat_clear, epd_pcb_w + 2*seat_clear, seat_h_epd);
+
+    // ESP32 — полная рамка (вырез USB прорежет левое ребро)
+    seat_frame(esp_x - seat_clear, esp_y - seat_clear,
+               esp_l + 2*seat_clear, esp_w + 2*seat_clear, seat_h_small);
+
+    // SCD41 — только ДВА ребра (слева и сверху): датчик прижат в угол к
+    // правой и нижней стенкам, где вентиляция — рёбра её не перекрывают.
+    translate([scd_x - seat_clear - seat_rib, scd_y - seat_clear, floor_t])
+        cube([seat_rib, scd_w + 2*seat_clear, seat_h_small]);            // левое ребро
+    translate([scd_x - seat_clear - seat_rib, scd_y + scd_w + seat_clear, floor_t])
+        cube([scd_l + 2*seat_clear + seat_rib, seat_rib, seat_h_small]); // верхнее ребро
 }
 
-// 4 сквозных отверстия в углах (под винт / пилот).
-module corner_drill(z0, h, d) {
-    pts = [[0,0],[outer_w,0],[0,outer_h],[outer_w,outer_h]];
-    for (p = pts)
-        translate([p[0], p[1], z0]) cylinder(d = d, h = h);
+module window_cut() {
+    translate([win_x, win_y, -1]) cube([epd_act_w, epd_act_h, floor_t + 2]);
+}
+
+module buttons_cut() {
+    translate([btn_cx - btn_spacing/2, btn_y, -1]) cylinder(d = btn_hole_d, h = floor_t + 2);
+    translate([btn_cx + btn_spacing/2, btn_y, -1]) cylinder(d = btn_hole_d, h = floor_t + 2);
+}
+
+// Вырез USB-C в левой стенке (режет и стенку, и левое ребро гнезда ESP32).
+module usb_cut() {
+    translate([-1, esp_y + esp_w/2 - usb_w/2, floor_t + (esp_h - usb_h)/2])
+        cube([wall + seat_rib + 2, usb_w, usb_h]);
+}
+
+// Две вентиляции у SCD41: щели в правой стенке + щели в нижней стенке.
+module vents_cut() {
+    // правая стенка (нормаль X): 3 вертикальные щели
+    for (i = [0:2])
+        translate([wall + inner_w - 1, scd_y + 3 + i*5, floor_t + 1.5])
+            cube([wall + 2, vent_w, 5]);
+    // нижняя стенка (нормаль Y): 3 горизонтальные щели
+    for (i = [0:2])
+        translate([scd_x + 3, -1, floor_t + 1.5 + i*2.2])
+            cube([scd_l - 6, wall + 2, vent_w]);
+}
+
+// Пазы под сдвижную крышку: в левой и правой стенках + слот сверху для въезда.
+module lid_slots() {
+    // левый паз (в левую стенку на rail_d), открыт сверху
+    translate([wall - rail_d, wall, lid_z0])
+        cube([rail_d, inner_h + wall + 1, lid_t]);
+    // правый паз
+    translate([wall + inner_w, wall, lid_z0])
+        cube([rail_d, inner_h + wall + 1, lid_t]);
+    // слот в верхней стенке (въезд крышки сверху)
+    translate([wall - rail_d, wall + inner_h, lid_z0])
+        cube([inner_w + 2*rail_d, wall + 1, lid_t]);
+}
+
+// Лунка-защёлка в правом пазу у дна (бугорок на крышке туда щёлкает).
+module detent_pocket() {
+    translate([wall + inner_w + rail_d/2, wall + 3, lid_z0 + lid_t/2])
+        rotate([0, 90, 0]) cylinder(d = detent_d, h = rail_d + 1, center = true);
 }
 
 // ============================================================
-//  Корпус (shell)
+//  Корпус
 // ============================================================
 module shell() {
     difference() {
         union() {
-            cube([outer_w, outer_h, outer_d]);
-            // сплошные стойки под винты крышки (в углах, у тыла)
-            corner_solid(outer_d - ear_h, ear_h);
+            difference() {
+                cube([outer_w, outer_h, outer_d]);
+                cavity_cut();
+                lid_slots();
+                detent_pocket();
+            }
+            seats();
         }
-
-        // Внутренняя полость (тыл открыт: +1 по Z за заднюю грань)
-        translate([wall, wall, floor_t])
-            cube([inner_w, inner_h, inner_d + 1]);
-
-        // Пилотные отверстия в стойках (самонарезающий M2)
-        corner_drill(outer_d - ear_h - 1, ear_h + 2, ear_pilot_d);
-
-        // Окно экрана
-        translate([win_x, win_y, -1])
-            cube([epd_act_w, epd_act_h, floor_t + 2]);
-
-        // Отверстия под кнопки
-        translate([btn_cx - btn_spacing/2, btn_y, -1])
-            cylinder(d = btn_hole_d, h = floor_t + 2);
-        translate([btn_cx + btn_spacing/2, btn_y, -1])
-            cylinder(d = btn_hole_d, h = floor_t + 2);
-
-        // Вырез USB-C в левой стенке (напротив ESP32)
-        translate([-1, esp_y + esp_w/2 - usb_w/2, floor_t + (esp_h - usb_h)/2])
-            cube([wall + 2, usb_w, usb_h]);
-
-        // Решётка SCD41 — правая стенка над сенсором
-        vents_x(outer_w, scd_y + 2, floor_t + 1,
-                floor(scd_w / vent_pitch) - 1,
-                floor(scd_h / vent_pitch));
-
-        // Второй вент для сквозняка — нижняя стенка под SCD41
-        vents_y(0, scd_x + 1, floor_t + 1,
-                floor(scd_l / vent_pitch) - 1,
-                floor(scd_h / vent_pitch));
+        // финальные вырезы (режут стенки и рёбра)
+        window_cut();
+        buttons_cut();
+        usb_cut();
+        vents_cut();
     }
 }
 
 // ============================================================
-//  Задняя крышка (lid)
+//  Сдвижная крышка
 // ============================================================
 module lid() {
-    difference() {
-        union() {
-            cube([outer_w, outer_h, lid_t]);
-            corner_solid(0, lid_t);          // ушки в тон корпусу
+    notch_d = 10;
+    union() {
+        difference() {
+            // плита с язычками (заходят в пазы)
+            translate([wall - rail_d + slide_clear,
+                       wall + lid_y_clear, lid_z0])
+                cube([inner_w + 2*rail_d - 2*slide_clear,
+                      inner_h - 2*lid_y_clear, lid_t]);
+            // палец-вырез на въездной (верхней) кромке
+            translate([outer_w/2, wall + inner_h, lid_z0 - 1])
+                cylinder(d = notch_d, h = lid_t + 2);
         }
-        corner_drill(-1, lid_t + 2, ear_hole_d);  // сквозные под винт
+        // бугорок-защёлка на правом язычке у дна
+        translate([wall + inner_w + rail_d/2, wall + lid_y_clear + 3, lid_z0 + lid_t/2])
+            rotate([0, 90, 0]) cylinder(d = detent_d, h = rail_d, center = true);
     }
 }
 
 // ============================================================
-//  Превью деталей (только в F5; полупрозрачные «коробки»)
+//  Тела модулей (для проверки посадки; в STL не идут)
 // ============================================================
-module components_preview() {
-    // e-Paper
-    color("green", 0.35)
-        translate([epd_x, epd_y, epd_z]) cube([epd_pcb_l, epd_pcb_w, epd_stack]);
-    // ESP32
-    color("blue", 0.35)
-        translate([esp_x, esp_y, esp_z]) cube([esp_l, esp_w, esp_h]);
-    // SCD41
-    color("red", 0.35)
-        translate([scd_x, scd_y, scd_z]) cube([scd_l, scd_w, scd_h]);
-    // Батарея
-    color("orange", 0.25)
-        translate([bat_x, bat_y, bat_z]) cube([bat_l, bat_w, bat_h]);
+module ghosts(show_bat = true) {
+    color("green", 0.45)  translate([epd_x, epd_y, floor_t]) cube([epd_pcb_l, epd_pcb_w, epd_stack]);
+    color("blue",  0.45)  translate([esp_x, esp_y, floor_t]) cube([esp_l, esp_w, esp_h]);
+    color("red",   0.55)  translate([scd_x, scd_y, floor_t]) cube([scd_l, scd_w, scd_h]);
+    if (show_bat)
+        color("orange",0.20) translate([bat_x, bat_y, bat_z]) cube([bat_l, bat_w, bat_h]);
 }
 
 // ============================================================
-//  RENDER — что показать/экспортировать
+//  RENDER
 // ============================================================
-// Переключатель детали. В GUI оставь "all" (видишь обе детали + призраки).
-// Для экспорта STL рендерю из командной строки:
-//   openscad -D 'part="shell"' -o case_shell.stl case.scad
-//   openscad -D 'part="lid"'   -o case_lid.stl   case.scad
-part = "all";   // "all" | "shell" | "lid"
+part = "all";   // "all" | "fit" | "shell" | "lid" | "print"
 
 if (part == "shell") {
     shell();
 } else if (part == "lid") {
     lid();
-} else {                         // "all" — общий вид
+} else if (part == "fit") {
+    // корпус + детали внутри (без крышки) — видно посадку
     shell();
-    if ($preview) components_preview();
-    translate([outer_w + 10, 0, 0]) lid();   // крышка вынесена вбок
+    ghosts();
+} else if (part == "fit_nb") {
+    // то же, но без батареи — видно гнёзда и плату электроники
+    shell();
+    ghosts(show_bat = false);
+} else if (part == "cut") {
+    // продольный разрез по центру X — видно слои по глубине
+    intersection() {
+        union() { shell(); ghosts(); }
+        translate([outer_w/2, -5, -5]) cube([outer_w, outer_h + 10, outer_d + 10]);
+    }
+} else if (part == "print") {
+    // обе детали на плоскости для заказа STL
+    shell();
+    translate([0, outer_h + 10, -lid_z0]) lid();   // крышка рядом, опущена на стол
+} else {
+    // общий вид: корпус + призраки + крышка «выехала» назад (explode)
+    shell();
+    if ($preview) ghosts();
+    translate([0, 0, 14]) lid();
 }
