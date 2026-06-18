@@ -88,9 +88,9 @@ win_y = wall + inner_h - act_h - 5;
 epd_x = win_x - act_ox;
 epd_y = win_y - act_oy;
 
-// Решётка датчика — по центру X, ПОД экраном (ниже, с явным зазором)
+// Решётка датчика — по центру X, ниже (явный зазор от экрана)
 grille_cx = outer_w/2;
-grille_cy = 13;
+grille_cy = 10;
 can_cx = grille_cx;
 can_cy = grille_cy;
 scd_x  = can_cx - (scd_l - scd_can_off - can/2);
@@ -253,7 +253,8 @@ module top_windows() {   // окошки в верхней стенке под �
 }
 module emboss() {         // ВЫПУКЛАЯ надпись СНАРУЖИ лица, слева-снизу (зеркально кнопке)
     translate([label_cx, label_cy, -0.8])
-        linear_extrude(1.3) text(label, size = 6, halign = "center", valign = "center");
+        mirror([1, 0, 0])
+            linear_extrude(1.3) text(label, size = 6, halign = "center", valign = "center");
 }
 
 // ============================================================
@@ -307,8 +308,8 @@ module top_tab(tx) {
     y_e = wall + inner_h - lid_clear;       // верхний край плиты
     // плечо: вперёд (-Z) вдоль верхней стенки, соединено с плитой
     translate([tx - tab_w/2, y_e - tab_t, lid_z0 - tab_arm]) cube([tab_w, tab_t, tab_arm]);
-    // зацеп: торчит +Y СКВОЗЬ окошко стенки и ловит его передний край
-    translate([tx - tab_w/2, y_e, lid_z0 - tab_arm]) cube([tab_w, wall + lid_clear + 0.8, barb_h]);
+    // зацеп: входит в окошко ЗАПОДЛИЦО (наружу не торчит), ловит край окошка
+    translate([tx - tab_w/2, y_e, lid_z0 - tab_arm]) cube([tab_w, wall + lid_clear - 0.2, barb_h]);
 }
 module lid() {
     cl = lid_clear;
@@ -319,7 +320,6 @@ module lid() {
             for (tx = [outer_w/2 - 16, outer_w/2 + 16]) top_tab(tx);
         }
         translate([-1, wall - 1, outer_d - lip_zt]) cube([outer_w + 2, (wall+lip_in+lip_clear)-(wall-1), lip_zt+1]);
-        translate([outer_w/2, wall + inner_h, outer_d + 0.5]) rotate([90,0,0]) cylinder(d = 12, h = 8, center = true);
     }
 }
 
