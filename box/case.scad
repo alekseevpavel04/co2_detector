@@ -19,11 +19,20 @@
 
 $fn = 32;
 
-/* ---------- Стенки / допуски ---------- */
+/* ---------- Стенки / допуски ----------
+   ЗАПАСЫ заложены щедро (лучше люфт, чем не влезет): платы 0.5, отверстия с
+   запасом, отсек электроники с запасом по дюпонам, окно экрана с допуском на
+   смещение. Тонкая подгонка — на пробной печати. */
 wall    = 2.0;
 floor_t = 2.0;
 lid_t   = 2.0;
-fit     = 0.4;
+fit     = 0.5;     // зазор плата↔стенка (с запасом)
+
+/* ---------- Запасы на посадки/вырезы ---------- */
+btn_clear    = 0.5;   // зазор корпуса кнопки в гнезде
+btn_hole_clr = 1.0;   // прибавка к Ø актуатора (ход без зацепа)
+scd_port_clr = 1.5;   // прибавка к Ø сенсора в окне лица
+win_margin   = 1.0;   // окно экрана крупнее активной зоны (допуск на смещение)
 
 /* ---------- e-Paper 2.13" (даташит) ---------- */
 epd_l = 65; epd_w = 30.2; epd_t = 1.2; epd_back = 4;   // плата + компоненты сзади
@@ -46,7 +55,7 @@ scd_hdr_n = 4;                               // линейка 1×4 на лев�
 
 /* ---------- ESP32-S3 SuperMini (замер) ---------- */
 esp_l = 23.5; esp_w = 18; esp_h = 6;
-usb_w = 9.5; usb_h = 3.5;               // USB-C ~3 мм на плате
+usb_w = 11; usb_h = 5.5;                // вырез USB-C с запасом под штекер кабеля
 
 /* ---------- Разъёмы: дюпон-мама на пинах (замер) ---------- */
 hdr_h   = 6;     // высота пина над платой
@@ -54,12 +63,12 @@ dup_h   = 17;    // длина дюпон-мама (худший случай)
 dup_w   = 2.5;   // сторона корпуса дюпона 2.5×2.5
 
 /* ---------- Глубина отсека электроники (платы + дюпоны) ---------- */
-// Дюпоны до 17 мм вертикально → отсек глубокий.
-chamber_d = 24;  // TODO: уменьшить, если пины угловые/пайка напрямую
+// Дюпоны до 17 мм вертикально (+ загиб провода) → отсек глубокий, с запасом.
+chamber_d = 27;  // TODO: уменьшить, если пины угловые/пайка напрямую
 
 /* ---------- Батарейный отсек 3xAA (замер) ---------- */
 bat_l = 58; bat_w = 48; bat_h = 17;     // провода вниз (не мешают)
-sw_slot_w = 7; sw_slot_h = 3;           // выключатель отдельный на проводе → паз 7×3
+sw_slot_w = 7.5; sw_slot_h = 3.5;       // выключатель отдельный → паз ~7×3 с запасом
 
 /* ---------- Крепёж плат (штырьки-защёлки) ---------- */
 post = 2.5; pclear = 0.25; lip = 0.8; lip_h = 1.0; clampc = 0.1;
@@ -68,11 +77,11 @@ post = 2.5; pclear = 0.25; lip = 0.8; lip_h = 1.0; clampc = 0.1;
 cham_wall = 1.5;
 
 /* ---------- Полка-перегородка ---------- */
-shelf_t = 1.5; shelf_gap = 0.5; ledge_in = 2.0; ledge_t = 1.5;
-wire_w = 8; finger_d = 14; batt_rib = 1.5;
+shelf_t = 1.5; shelf_gap = 1.0; ledge_in = 2.0; ledge_t = 1.5;   // зазор над платами с запасом
+wire_w = 10; finger_d = 14; batt_rib = 1.5;                      // вырез проводов шире
 
 /* ---------- Крышка (низ под губу + верх на защёлки) ---------- */
-lid_clear = 0.3; lip_in = 2.0; lip_zt = 1.0; lip_clear = 0.3;
+lid_clear = 0.4; lip_in = 2.0; lip_zt = 1.0; lip_clear = 0.4;
 tab_w = 9; tab_t = 1.2; tab_arm = 7; barb_out = 1.0; barb_h = 2.5;
 bead_in = 1.2; bead_z = 1.5;
 
@@ -173,13 +182,15 @@ module cavity_cut() {
     translate([wall, wall, floor_t]) cube([inner_w, inner_h, outer_d]);
 }
 module window_cut() {
-    translate([win_x, win_y, -1]) cube([act_w, act_h, floor_t + 2]);
+    // окно крупнее активной зоны на win_margin со всех сторон (допуск на смещение)
+    translate([win_x - win_margin, win_y - win_margin, -1])
+        cube([act_w + 2*win_margin, act_h + 2*win_margin, floor_t + 2]);
 }
 module button_hole() {
-    translate([btn_cx, btn_cy, -1]) cylinder(d = act_d + 0.6, h = floor_t + 2);
+    translate([btn_cx, btn_cy, -1]) cylinder(d = act_d + btn_hole_clr, h = floor_t + 2);
 }
 module scd_port() {
-    translate([can_cx, can_cy, -1]) cylinder(d = can + 1, h = floor_t + 2);  // сенсор в лицо
+    translate([can_cx, can_cy, -1]) cylinder(d = can + scd_port_clr, h = floor_t + 2);  // сенсор в лицо
 }
 module usb_cut() {
     translate([-1, esp_y + esp_w/2 - usb_w/2, floor_t + (esp_h - usb_h)/2])
@@ -200,14 +211,15 @@ module switch_slot() {
 
 // Гнездо кнопки: рамка 12×12 + 2 язычка прижимают корпус к лицу
 module button_mount() {
-    h = btn_can + clampc + lip_h;
+    h  = btn_can + clampc + lip_h;
+    bi = btn + 2*btn_clear;          // внутренний размер гнезда (кнопка входит с зазором)
     translate([btn_cx, btn_cy, floor_t]) {
         difference() {
-            translate([-(btn/2+wall), -(btn/2+wall), 0]) cube([btn+2*wall, btn+2*wall, h]);
-            translate([-btn/2, -btn/2, -1]) cube([btn, btn, h+2]);
+            translate([-(bi/2+wall), -(bi/2+wall), 0]) cube([bi+2*wall, bi+2*wall, h]);
+            translate([-bi/2, -bi/2, -1]) cube([bi, bi, h+2]);
         }
-        translate([-btn/2, btn/2 - lip, btn_can+clampc]) cube([btn, lip, lip_h]);
-        translate([-btn/2, -btn/2,      btn_can+clampc]) cube([btn, lip, lip_h]);
+        translate([-bi/2, bi/2 - lip, btn_can+clampc]) cube([bi, lip, lip_h]);
+        translate([-bi/2, -bi/2,      btn_can+clampc]) cube([bi, lip, lip_h]);
     }
 }
 
