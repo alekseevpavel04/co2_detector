@@ -28,8 +28,8 @@ fit     = 0.4;
 /* ---------- e-Paper 2.13" (даташит) ---------- */
 epd_l = 65; epd_w = 30.2; epd_t = 1.2; epd_back = 4;   // плата + компоненты сзади
 act_w = 48.55; act_h = 23.71;          // активная зона
-act_ox = 3; act_oy = 3.2;              // смещение зоны от края платы — ОЦЕНКА, TODO:verify
-// шлейф/FPC справа, тонкий — глубокого места не требует
+act_ox = 5; act_oy = 3.25;             // смещение зоны: слева 5, сверху 3.25 (замер)
+// 8-пиновый разъём на самой плате (отдельной платы-драйвера нет) → провода/дюпон
 
 /* ---------- Кнопка тактовая 12×12 (замер) ---------- */
 btn      = 12;       // корпус 12×12
@@ -46,7 +46,7 @@ scd_hdr_n = 4;                               // линейка 1×4 на лев�
 
 /* ---------- ESP32-S3 SuperMini (замер) ---------- */
 esp_l = 23.5; esp_w = 18; esp_h = 6;
-usb_w = 9.5; usb_h = 4;
+usb_w = 9.5; usb_h = 3.5;               // USB-C ~3 мм на плате
 
 /* ---------- Разъёмы: дюпон-мама на пинах (замер) ---------- */
 hdr_h   = 6;     // высота пина над платой
@@ -138,10 +138,11 @@ module header_dupont(x0, y0, z0, n) {
 }
 
 module ghosts(show_bat = true, show_shelf = true) {
-    // e-Paper (плата + экран + компоненты сзади + тонкий шлейф)
+    // e-Paper (плата + экран + компоненты сзади + 8-пиновый разъём с дюпоном)
     color("green", 0.5) translate([epd_x, epd_y, floor_t]) cube([epd_l, epd_w, epd_t]);
     color("dimgray", 0.5) translate([epd_x+2, epd_y+2, floor_t+epd_t]) cube([epd_l-4, epd_w-4, epd_back]);
     color("white", 0.6) translate([win_x, win_y, -0.1]) cube([act_w, act_h, floor_t+0.2]);
+    header_dupont(epd_x + 8, epd_y + 1.5, floor_t + epd_t, 8);   // 8-пин разъём экрана
 
     // ESP32 + дюпоны на двух длинных краях
     color("blue", 0.5) translate([esp_x, esp_y, floor_t]) cube([esp_l, esp_w, esp_h]);
