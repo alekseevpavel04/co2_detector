@@ -54,7 +54,7 @@ sw_body_h = 9;   // высота
 
 /* ---------- Камера SCD41 / решётка ---------- */
 cham_wall = 1.5;
-grille_n = 7; grille_slot_w = 1.6; grille_pitch = 3.2; grille_slot_h = 9;
+grille_n = 9; grille_slot_w = 1.8; grille_pitch = 3.4; grille_slot_h = 12;   // больше/выше — вентиляция
 
 /* ---------- Полка ---------- */
 shelf_t = 1.5; shelf_gap = 1.0; ledge_in = 2.0; ledge_t = 1.5;
@@ -88,9 +88,9 @@ win_y = wall + inner_h - act_h - 5;
 epd_x = win_x - act_ox;
 epd_y = win_y - act_oy;
 
-// Решётка датчика — по центру X, ПОД экраном (с зазором, не задевает)
+// Решётка датчика — по центру X, ПОД экраном (ниже, с явным зазором)
 grille_cx = outer_w/2;
-grille_cy = 15;
+grille_cy = 13;
 can_cx = grille_cx;
 can_cy = grille_cy;
 scd_x  = can_cx - (scd_l - scd_can_off - can/2);
@@ -210,23 +210,23 @@ function vents_w() = 1.6;
 // ============================================================
 //  Внутренние фичи
 // ============================================================
-module button_mount() {   // гнездо кнопки на ЛИЦЕ (корпус 12×12 за лицом) + 2 язычка
-    h  = btn_can + clampc + lip_h;
-    bi = btn + 2*btn_clear;
-    translate([btn_cx, btn_cy, floor_t]) {
-        difference() {
-            translate([-(bi/2+wall), -(bi/2+wall), 0]) cube([bi+2*wall, bi+2*wall, h]);
-            translate([-bi/2, -bi/2, -1]) cube([bi, bi, h+2]);
-        }
-        translate([-bi/2, bi/2 - lip, btn_can+clampc]) cube([bi, lip, lip_h]);
-        translate([-bi/2, -bi/2,      btn_can+clampc]) cube([bi, lip, lip_h]);
-    }
-}
-module scd_seat() {       // плата на сенсоре; язычки от перегородки прижимают
-    zt  = floor_t + can_h + scd_t + clampc;
-    y_w = scd_y + scd_w + 0.6;
-    for (x = [scd_x + 3, scd_x + scd_l - 3])
-        translate([x - 2, scd_y + scd_w - lip, zt]) cube([4, (y_w + 0.5) - (scd_y + scd_w - lip), lip_h]);
+// Простые ЗАСТУПЫ (полочки) под детали: поставил на них и приклеил. Без подгонки.
+// Все начинаются чуть в стенке (z0) — чистый union, ничего не висит.
+module ledges() {
+    ld = 4;    // вылет заступа вглубь (+Z)
+    rt = 2;    // толщина заступа (по Y)
+    sr = 2;    // боковые рёбра-локаторы (только для экрана — точно к окну)
+    z0 = floor_t - 0.5;
+    // e-Paper: нижний заступ + 2 боковых ребра (внахлёст с заступом)
+    translate([epd_x, epd_y - rt, z0])             cube([epd_l, rt, ld + 0.5]);
+    translate([epd_x - sr, epd_y - rt, z0])        cube([sr, epd_w + rt, ld + 0.5]);
+    translate([epd_x + epd_l, epd_y - rt, z0])     cube([sr, epd_w + rt, ld + 0.5]);
+    // ESP: нижний заступ
+    translate([esp_x, esp_y - rt, z0])             cube([esp_l, rt, ld + 0.5]);
+    // SCD: веб-стойка от лица до глубины сенсора, плата опирается СВЕРХУ (не висит)
+    translate([scd_x, scd_y - rt, z0])             cube([scd_l, rt, can_h + 0.5]);
+    // Кнопка: заступ под корпус
+    translate([btn_cx - btn/2, btn_cy - btn/2 - rt, z0]) cube([btn, rt, ld + 0.5]);
 }
 module scd_chamber() {    // перегородки лево/верх + вырез под кабель
     ch_h = shelf_z - floor_t;
@@ -246,10 +246,10 @@ module shelf_ledges() {
 module bottom_lip() {
     translate([wall + 4, wall, outer_d - lip_zt]) cube([inner_w - 8, lip_in, lip_zt]);
 }
-module top_beads() {
-    bz = lid_z0 - tab_arm + barb_h;
+module top_windows() {   // окошки в верхней стенке под язычки крышки (защёлка)
     for (tx = [outer_w/2 - 16, outer_w/2 + 16])
-        translate([tx - tab_w/2 - 0.5, wall + inner_h - bead_in, bz]) cube([tab_w+1, bead_in, bead_z]);
+        translate([tx - tab_w/2 - 0.4, wall + inner_h - 0.5, lid_z0 - tab_arm - 0.4])
+            cube([tab_w + 0.8, wall + 1.5, barb_h + 0.8]);
 }
 module emboss() {         // ВЫПУКЛАЯ надпись СНАРУЖИ лица, слева-снизу (зеркально кнопке)
     translate([label_cx, label_cy, -0.8])
@@ -270,8 +270,8 @@ module shell() {
             // внутренние фичи ОБРЕЗАНЫ по форме корпуса (не вылезают за скругления)
             intersection() {
                 union() {
-                    scd_chamber(); button_mount(); scd_seat();
-                    shelf_ledges(); bottom_lip(); top_beads();
+                    scd_chamber(); ledges();
+                    shelf_ledges(); bottom_lip();
                 }
                 rbody(outer_w, outer_h, outer_d, r_v);
             }
@@ -279,6 +279,7 @@ module shell() {
         }
         window_cut(); grille_cut();
         usb_cut(); button_hole(); switch_slot(); vents_side();
+        top_windows();   // окошки защёлок крышки
     }
 }
 
@@ -303,9 +304,11 @@ module shelf() {
     }
 }
 module top_tab(tx) {
-    y_edge = wall + inner_h - lid_clear;
-    translate([tx - tab_w/2, y_edge - tab_t, lid_z0 - tab_arm]) cube([tab_w, tab_t, tab_arm]);
-    translate([tx - tab_w/2, y_edge, lid_z0 - tab_arm]) cube([tab_w, barb_out, barb_h]);
+    y_e = wall + inner_h - lid_clear;       // верхний край плиты
+    // плечо: вперёд (-Z) вдоль верхней стенки, соединено с плитой
+    translate([tx - tab_w/2, y_e - tab_t, lid_z0 - tab_arm]) cube([tab_w, tab_t, tab_arm]);
+    // зацеп: торчит +Y СКВОЗЬ окошко стенки и ловит его передний край
+    translate([tx - tab_w/2, y_e, lid_z0 - tab_arm]) cube([tab_w, wall + lid_clear + 0.8, barb_h]);
 }
 module lid() {
     cl = lid_clear;
@@ -330,12 +333,15 @@ else if (part == "shelf") shelf();
 else if (part == "lid") lid();
 else if (part == "fit") { shell(); ghosts(); }
 else if (part == "fit_nb") { shell(); ghosts(show_bat=false, show_shelf=false); }
+else if (part == "lidon") { shell(); color("plum",0.6) lid(); if ($preview) ghosts(); }  // крышка на месте
 else if (part == "cut") {
     intersection() { union() { shell(); ghosts(); } translate([outer_w/2,-5,-5]) cube([outer_w,outer_h+10,outer_d+10]); }
+} else if (part == "cutv") {   // вертикальный разрез по центру Y (видно слои/крышку)
+    intersection() { union() { shell(); color("plum",0.6) lid(); ghosts(); } translate([-5,wall+inner_h/2,-5]) cube([outer_w+10,outer_h,outer_d+10]); }
 } else if (part == "print") {
     shell();
-    translate([0, -(outer_h+8), -shelf_z]) shelf();
-    translate([0,  (outer_h+8), -lid_z0])  lid();
+    translate([-(outer_w+8), 0, -shelf_z]) shelf();                 // полка слева, плоско
+    translate([outer_w+8, 0, outer_d]) rotate([180,0,0]) lid();     // крышка справа, ПЕРЕВЁРНУТА (язычки вверх)
 } else {
     shell(); if ($preview) ghosts(); translate([0,0,18]) lid();
 }
