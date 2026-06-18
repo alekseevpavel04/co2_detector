@@ -1,9 +1,11 @@
 // ============================================================
-//  Air Quality Monitor — корпус (v6, стилевая переработка)
+//  Air Quality Monitor — корпус (v7)
 // ============================================================
-//  Вариант B: чистое лицо — экран по центру + решётка датчика под ним.
-//  Кнопка на ЛЕВОМ торце. Корпус сильно скруглён (R8 по вертик. рёбрам),
-//  окно экрана со скруглёнными углами + утопленная рамка.
+//  Вариант B: чистое лицо — экран по центру (рамка), решётка датчика под ним,
+//  кнопка справа, надпись «CO2» слева (симметрия). Корпус сильно скруглён (R10).
+//  v7: убрана камера датчика (душила решётку) → датчик на 4 угловых опорах,
+//  центр решётки и низ под шлейф экрана свободны. Крышка — СКРЫТАЯ защёлка:
+//  низ под губой + верх за внутренними приливами (наружу нет дыр и язычков).
 //  Размеры компонентов — замеренные (см. DIMENSIONS.md). Запасы заложены.
 //  3 объекта в одном STL (корпус, полка, крышка). Ghosts с пинами+дюпоном.
 // ============================================================
@@ -16,7 +18,7 @@ fit  = 0.5;                 // зазор плата↔стенка
 r_v  = 10;                  // скругление вертикальных рёбер (сильнее)
 chamf = 2.5;                // фаска переднего ребра
 r_win = 2.5;                // скругление углов окна экрана
-bez_w = 3.5; bez_d = 1.0;   // утопленная рамка вокруг экрана (ширина, глубина)
+bez_w = 4.5; bez_d = 1.3;   // утопленная рамка вокруг экрана (ширина, глубина)
 win_margin = 1.0;           // окно крупнее активной зоны (допуск на смещение)
 
 /* ---------- Запасы на посадки/вырезы ---------- */
@@ -52,19 +54,17 @@ sw_body_t = 7;   // вглубь от стенки (корпус+пины)
 sw_body_l = 13;  // вдоль стенки (планка с ушками)
 sw_body_h = 9;   // высота
 
-/* ---------- Камера SCD41 / решётка ---------- */
-cham_wall = 1.5;
+/* ---------- Решётка вентиляции датчика ---------- */
 grille_n = 9; grille_slot_w = 1.8; grille_pitch = 3.4; grille_slot_h = 12;   // больше/выше — вентиляция
 
 /* ---------- Полка ---------- */
 shelf_t = 1.5; shelf_gap = 1.0; ledge_in = 2.0; ledge_t = 1.5;
 wire_w = 10; finger_d = 14; batt_rib = 1.5;
 
-/* ---------- Крышка ---------- */
-lid_clear = 0.4; lip_in = 2.0; lip_zt = 1.0; lip_clear = 0.4;
-tab_w = 9; tab_t = 1.2; tab_arm = 7; barb_out = 1.0; barb_h = 2.5;
-bead_in = 1.2; bead_z = 1.5;
-post = 2.5; lip = 0.8; lip_h = 1.0; clampc = 0.1;
+/* ---------- Крышка (скрытая защёлка: низ под губой + верх за приливами) ---------- */
+lid_clear = 0.6;            // зазор-шов по периметру плиты = глубина зацепа защёлки
+lip_in = 2.0; lip_zt = 1.0; lip_clear = 0.4;
+tab_w = 9; tab_t = 1.2; tab_arm = 6; barb_h = 2.0; bead_len = 3.0;
 
 label = "CO2";
 
@@ -187,9 +187,6 @@ module grille_cut() {
             linear_extrude(floor_t + 2)
                 rrect(grille_slot_w, grille_slot_h, grille_slot_w/2);
 }
-module scd_port_cut() {   // отверстие под сенсор за решёткой (камера дышит)
-    translate([can_cx, can_cy, -1]) cylinder(d = can + 1.5, h = floor_t + 2);
-}
 module usb_cut() {        // ЛЕВЫЙ торец (ESP слева)
     translate([-1, esp_y + esp_w/2 - usb_w/2, floor_t + (esp_h - usb_h)/2])
         cube([wall + 2, usb_w, usb_h]);
@@ -215,29 +212,23 @@ function vents_w() = 1.6;
 module ledges() {
     ld = 4;    // вылет заступа вглубь (+Z)
     rt = 2;    // толщина заступа (по Y)
-    sr = 2;    // боковые рёбра-локаторы (только для экрана — точно к окну)
+    sr = 2;    // боковые рёбра-локаторы
+    ct = 8;    // длина углового заступа
     z0 = floor_t - 0.5;
-    // e-Paper: нижний заступ + 2 боковых ребра (внахлёст с заступом)
-    translate([epd_x, epd_y - rt, z0])             cube([epd_l, rt, ld + 0.5]);
-    translate([epd_x - sr, epd_y - rt, z0])        cube([sr, epd_w + rt, ld + 0.5]);
-    translate([epd_x + epd_l, epd_y - rt, z0])     cube([sr, epd_w + rt, ld + 0.5]);
+    // e-Paper: 2 боковых ребра + 2 нижних УГЛОВЫХ заступа.
+    // Центр-низ оставлен свободным — там выходит шлейф экрана.
+    translate([epd_x - sr, epd_y - rt, z0])            cube([sr, epd_w + rt, ld + 0.5]);
+    translate([epd_x + epd_l, epd_y - rt, z0])         cube([sr, epd_w + rt, ld + 0.5]);
+    translate([epd_x, epd_y - rt, z0])                 cube([ct, rt, ld + 0.5]);
+    translate([epd_x + epd_l - ct, epd_y - rt, z0])    cube([ct, rt, ld + 0.5]);
     // ESP: нижний заступ
-    translate([esp_x, esp_y - rt, z0])             cube([esp_l, rt, ld + 0.5]);
-    // SCD: веб-стойка от лица до глубины сенсора, плата опирается СВЕРХУ (не висит)
-    translate([scd_x, scd_y - rt, z0])             cube([scd_l, rt, can_h + 0.5]);
+    translate([esp_x, esp_y - rt, z0])                 cube([esp_l, rt, ld + 0.5]);
+    // SCD: 4 угловые опоры от лица до глубины сенсора. Центр (над решёткой)
+    // и низ свободны — вентиляция и шлейф не перекрыты.
+    for (x = [scd_x, scd_x + scd_l - 3]) for (y = [scd_y, scd_y + scd_w - 3])
+        translate([x, y, z0]) cube([3, 3, can_h + 0.5]);
     // Кнопка: заступ под корпус
     translate([btn_cx - btn/2, btn_cy - btn/2 - rt, z0]) cube([btn, rt, ld + 0.5]);
-}
-module scd_chamber() {    // перегородки лево/верх + вырез под кабель
-    ch_h = shelf_z - floor_t;
-    x_in = scd_x - 0.6; y_in = scd_y + scd_w + 0.6;
-    difference() {
-        union() {
-            translate([x_in - cham_wall, wall, floor_t]) cube([cham_wall, (y_in+cham_wall)-wall, ch_h]);
-            translate([x_in - cham_wall, y_in, floor_t]) cube([scd_l + 2*cham_wall + 1, cham_wall, ch_h]);
-        }
-        translate([x_in - cham_wall - 1, y_in - 1 - 6, floor_t + ch_h - 6]) cube([cham_wall+2, 6, 6.5]);
-    }
 }
 module shelf_ledges() {
     translate([wall, wall + inner_h - ledge_in, shelf_z - ledge_t]) cube([inner_w, ledge_in, ledge_t]);
@@ -246,10 +237,17 @@ module shelf_ledges() {
 module bottom_lip() {
     translate([wall + 4, wall, outer_d - lip_zt]) cube([inner_w - 8, lip_in, lip_zt]);
 }
-module top_windows() {   // окошки в верхней стенке под язычки крышки (защёлка)
+// Внутренние приливы на верхней стенке: за них цепляются зацепы крышки.
+// Клин: -Z грань вертикальная (стопор от выпадения), +Z грань скошена (заход).
+// Наружу НИЧЕГО не торчит и нет дыр.
+module top_bead() {
+    c = lid_clear;
+    z_b = lid_z0 - tab_arm + barb_h;   // -Z грань вплотную за зацепом
     for (tx = [outer_w/2 - 16, outer_w/2 + 16])
-        translate([tx - tab_w/2 - 0.4, wall + inner_h - 0.5, lid_z0 - tab_arm - 0.4])
-            cube([tab_w + 0.8, wall + 1.5, barb_h + 0.8]);
+        hull() {
+            translate([tx - tab_w/2 - 0.5, wall + inner_h - c, z_b])            cube([tab_w + 1, c, 0.01]);
+            translate([tx - tab_w/2 - 0.5, wall + inner_h - 0.01, z_b + bead_len]) cube([tab_w + 1, 0.01, 0.01]);
+        }
 }
 module emboss() {         // ВЫПУКЛАЯ надпись СНАРУЖИ лица, слева-снизу (зеркально кнопке)
     translate([label_cx, label_cy, -0.8])
@@ -271,8 +269,9 @@ module shell() {
             // внутренние фичи ОБРЕЗАНЫ по форме корпуса (не вылезают за скругления)
             intersection() {
                 union() {
-                    scd_chamber(); ledges();
+                    ledges();
                     shelf_ledges(); bottom_lip();
+                    top_bead();   // приливы под защёлку крышки (внутри, без дыр)
                 }
                 rbody(outer_w, outer_h, outer_d, r_v);
             }
@@ -280,7 +279,6 @@ module shell() {
         }
         window_cut(); grille_cut();
         usb_cut(); button_hole(); switch_slot(); vents_side();
-        top_windows();   // окошки защёлок крышки
     }
 }
 
@@ -306,10 +304,10 @@ module shelf() {
 }
 module top_tab(tx) {
     y_e = wall + inner_h - lid_clear;       // верхний край плиты
-    // плечо: вперёд (-Z) вдоль верхней стенки, соединено с плитой
+    // плечо-консоль: от плиты вперёд (-Z) вдоль верхней стенки (пружинит)
     translate([tx - tab_w/2, y_e - tab_t, lid_z0 - tab_arm]) cube([tab_w, tab_t, tab_arm]);
-    // зацеп: входит в окошко ЗАПОДЛИЦО (наружу не торчит), ловит край окошка
-    translate([tx - tab_w/2, y_e, lid_z0 - tab_arm]) cube([tab_w, wall + lid_clear - 0.2, barb_h]);
+    // зацеп на конце плеча: +Y до лица стенки (НЕ сквозь), цепляет внутренний прилив
+    translate([tx - tab_w/2, y_e, lid_z0 - tab_arm]) cube([tab_w, lid_clear, barb_h]);
 }
 module lid() {
     cl = lid_clear;
@@ -338,6 +336,11 @@ else if (part == "cut") {
     intersection() { union() { shell(); ghosts(); } translate([outer_w/2,-5,-5]) cube([outer_w,outer_h+10,outer_d+10]); }
 } else if (part == "cutv") {   // вертикальный разрез по центру Y (видно слои/крышку)
     intersection() { union() { shell(); color("plum",0.6) lid(); ghosts(); } translate([-5,wall+inner_h/2,-5]) cube([outer_w+10,outer_h,outer_d+10]); }
+} else if (part == "snap") {   // разрез у правого язычка: видно зацеп+прилив
+    intersection() {
+        union() { shell(); color("plum") lid(); }
+        translate([outer_w/2 + 16 - 3, wall + inner_h - 9, lid_z0 - tab_arm - 4]) cube([6, 13, tab_arm + barb_h + 10]);
+    }
 } else if (part == "print") {
     shell();
     translate([-(outer_w+8), 0, -shelf_z]) shelf();                 // полка слева, плоско
