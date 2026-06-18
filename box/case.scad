@@ -13,7 +13,8 @@ $fn = 32;
 /* ---------- Стенки / допуски / стиль ---------- */
 wall = 2.0; floor_t = 2.0; lid_t = 2.0;
 fit  = 0.5;                 // зазор плата↔стенка
-r_v  = 8;                   // скругление вертикальных рёбер (сильное)
+r_v  = 10;                  // скругление вертикальных рёбер (сильнее)
+chamf = 2.5;                // фаска переднего ребра
 r_win = 2.5;                // скругление углов окна экрана
 bez_w = 3.5; bez_d = 1.0;   // утопленная рамка вокруг экрана (ширина, глубина)
 win_margin = 1.0;           // окно крупнее активной зоны (допуск на смещение)
@@ -26,8 +27,8 @@ epd_l = 65; epd_w = 30.2; epd_t = 1.2; epd_back = 4;
 act_w = 48.55; act_h = 23.71;
 act_ox = 5; act_oy = 3.25;   // смещение активной зоны от края платы
 
-/* ---------- Кнопка тактовая 12×12 (на боковом торце) ---------- */
-btn = 12; btn_can = 3.3; act_d = 6.55; btn_legs = 3.5;
+/* ---------- Кнопка тактовая 12×12 (на лице, справа-снизу) ---------- */
+btn = 12; btn_can = 3.3; act_d = 6.55; act_out = 8.25; btn_legs = 3.5;
 
 /* ---------- SCD41 (по центру под экраном, сенсор за решёткой) ---------- */
 scd_l = 21.6; scd_w = 13.4; scd_t = 1.6;
@@ -45,7 +46,11 @@ chamber_d = 27;
 
 /* ---------- Батарея 3xAA + отдельный выключатель ---------- */
 bat_l = 58; bat_w = 48; bat_h = 17;
-sw_slot_w = 7.5; sw_slot_h = 3.5;
+sw_slot_w = 7.5; sw_slot_h = 3.5;        // паз под слайдер
+// выключатель целиком (корпус+планка+пины) — для проверки места внутри, TODO:verify
+sw_body_t = 7;   // вглубь от стенки (корпус+пины)
+sw_body_l = 13;  // вдоль стенки (планка с ушками)
+sw_body_h = 9;   // высота
 
 /* ---------- Камера SCD41 / решётка ---------- */
 cham_wall = 1.5;
@@ -66,9 +71,9 @@ label = "CO2";
 // ============================================================
 //  Производная компоновка
 // ============================================================
-inner_w = 73;                                   // под центрированное окно + платы
-inner_h = max(bat_w, epd_w + 2 + max(esp_w, scd_w)) + 2*fit;   // ~52
-outer_w = inner_w + 2*wall;                     // 77
+inner_w = 82;                                   // шире — чтобы лицо вышло симметричным
+inner_h = max(bat_w, epd_w + 6 + max(esp_w, scd_w)) + 2*fit;   // зазор экран↔низ
+outer_w = inner_w + 2*wall;
 outer_h = inner_h + 2*wall;
 
 shelf_z = floor_t + chamber_d + shelf_gap;
@@ -79,28 +84,27 @@ outer_d = lid_z0 + lid_t;
 
 // Окно (активная зона) — по центру X, в верхней части
 win_x = (outer_w - act_w)/2;
-win_y = wall + inner_h - act_h - 5;             // ~5 мм от верха
-// e-Paper плата за окном
+win_y = wall + inner_h - act_h - 5;
 epd_x = win_x - act_ox;
 epd_y = win_y - act_oy;
 
-// Решётка датчика — по центру X, ПОД платой экрана (не у самого низа)
+// Решётка датчика — по центру X, ПОД экраном (с зазором, не задевает)
 grille_cx = outer_w/2;
-grille_cy = epd_y - 8.5;
-// SCD — сенсором за решёткой (по центру), плата опирается на сенсор
+grille_cy = 15;
 can_cx = grille_cx;
 can_cy = grille_cy;
 scd_x  = can_cx - (scd_l - scd_can_off - can/2);
 scd_y  = can_cy - scd_w/2;
 
-// ESP — низ-право, USB в правый торец
-esp_x = wall + inner_w - esp_l - fit;
+// ESP — низ-ЛЕВО, USB в ЛЕВЫЙ торец (освобождает право под кнопку)
+esp_x = wall + fit;
 esp_y = wall + fit;
 
-// Кнопка — на ЛЕВОМ торце, по высоте в зоне отсека электроники
-btn_sx = 0;                                     // левый торец (X=0)
-btn_cy = wall + inner_h/2;                      // по центру высоты
-btn_cz = floor_t + chamber_d/2;                 // середина отсека по глубине
+// Кнопка — на ЛИЦЕ справа-снизу; надпись — слева-снизу (зеркально, для баланса)
+btn_cx   = grille_cx + 24;
+btn_cy   = grille_cy;
+label_cx = grille_cx - 24;
+label_cy = grille_cy;
 
 // Батарея — по центру
 bat_x = wall + (inner_w - bat_l)/2;
@@ -114,6 +118,13 @@ module rrect(w, h, r) {
 }
 module rbody(w, h, d, r) {                      // призма со скруглёнными вертик. рёбрами
     linear_extrude(d) rrect(w, h, r);
+}
+module outer_body() {                           // корпус: скругление + фаска переднего ребра
+    hull() {                                    // фаска у лица z=0..chamf
+        linear_extrude(0.01) offset(-chamf) rrect(outer_w, outer_h, r_v);
+        translate([0, 0, chamf]) linear_extrude(0.01) rrect(outer_w, outer_h, r_v);
+    }
+    translate([0, 0, chamf]) rbody(outer_w, outer_h, outer_d - chamf, r_v);
 }
 
 // ============================================================
@@ -140,14 +151,19 @@ module ghosts(show_bat = true, show_shelf = true) {
     color("silver") translate([can_cx-can/2, can_cy-can/2, floor_t]) cube([can, can, can_h]);
     header_dupont(scd_x+2, scd_y+scd_w/2-(scd_hdr_n*2.54)/2, floor_t+can_h+scd_t, scd_hdr_n);
 
-    // кнопка на левом торце: корпус у стенки, актуатор наружу (-X), дюпон внутрь
-    translate([0, btn_cy, btn_cz]) {
-        color("black",0.6) translate([wall, -btn/2, -btn/2]) cube([btn_can, btn, btn]);
-        color("dimgray") translate([-3, 0, 0]) rotate([0,90,0]) cylinder(d=act_d, h=wall+btn_can);
+    // кнопка на ЛИЦЕ: корпус за лицом, актуатор наружу (-Z)
+    translate([btn_cx, btn_cy, 0]) {
+        color("black",0.6) translate([-btn/2, -btn/2, floor_t]) cube([btn, btn, btn_can]);
+        color("dimgray") translate([0,0,-act_out]) cylinder(d=act_d, h=act_out+floor_t+1);
     }
 
     if (show_shelf) color("gray",0.3) shelf();
-    if (show_bat) color("orange",0.18) translate([bat_x, bat_y, bat_z]) cube([bat_l, bat_w, bat_h]);
+    if (show_bat) {
+        color("orange",0.18) translate([bat_x, bat_y, bat_z]) cube([bat_l, bat_w, bat_h]);
+        // выключатель (слайдер с планкой) у правой стенки, в зоне батареи
+        color("dimgray",0.6) translate([wall+inner_w-sw_body_t, wall+inner_h/2-sw_body_l/2, bat_z+bat_h/2-sw_body_h/2])
+            cube([sw_body_t, sw_body_l, sw_body_h]);
+    }
 }
 
 // ============================================================
@@ -174,14 +190,14 @@ module grille_cut() {
 module scd_port_cut() {   // отверстие под сенсор за решёткой (камера дышит)
     translate([can_cx, can_cy, -1]) cylinder(d = can + 1.5, h = floor_t + 2);
 }
-module usb_cut() {        // правый торец
-    translate([outer_w - wall - 1, esp_y + esp_w/2 - usb_w/2, floor_t + (esp_h - usb_h)/2])
+module usb_cut() {        // ЛЕВЫЙ торец (ESP слева)
+    translate([-1, esp_y + esp_w/2 - usb_w/2, floor_t + (esp_h - usb_h)/2])
         cube([wall + 2, usb_w, usb_h]);
 }
-module button_hole() {    // левый торец
-    translate([-1, btn_cy, btn_cz]) rotate([0,90,0]) cylinder(d = act_d + btn_hole_clr, h = wall + 2);
+module button_hole() {    // на ЛИЦЕ, справа-снизу
+    translate([btn_cx, btn_cy, -1]) cylinder(d = act_d + btn_hole_clr, h = floor_t + 2);
 }
-module switch_slot() {    // правый торец, у батарейного отсека
+module switch_slot() {    // правый торец, у батарейного отсека (под слайдер)
     translate([outer_w - wall - 1, wall + inner_h/2 - sw_slot_w/2, bat_z + bat_h/2 - sw_slot_h/2])
         cube([wall + 2, sw_slot_w, sw_slot_h]);
 }
@@ -194,16 +210,17 @@ function vents_w() = 1.6;
 // ============================================================
 //  Внутренние фичи
 // ============================================================
-module button_mount() {   // гнездо кнопки на левом торце (корпус 12×12 у стенки)
+module button_mount() {   // гнездо кнопки на ЛИЦЕ (корпус 12×12 за лицом) + 2 язычка
+    h  = btn_can + clampc + lip_h;
     bi = btn + 2*btn_clear;
-    translate([wall, btn_cy, btn_cz])
+    translate([btn_cx, btn_cy, floor_t]) {
         difference() {
-            translate([0, -(bi/2+wall), -(bi/2+wall)]) cube([btn_can+clampc+lip_h, bi+2*wall, bi+2*wall]);
-            translate([-1, -bi/2, -bi/2]) cube([btn_can+clampc+lip_h+2, bi, bi]);
+            translate([-(bi/2+wall), -(bi/2+wall), 0]) cube([bi+2*wall, bi+2*wall, h]);
+            translate([-bi/2, -bi/2, -1]) cube([bi, bi, h+2]);
         }
-    // 2 язычка (сверху/снизу по Z) прижимают корпус кнопки к торцу
-    translate([wall+btn_can+clampc, btn_cy-bi/2, btn_cz+bi/2-lip]) cube([lip_h, bi, lip]);
-    translate([wall+btn_can+clampc, btn_cy-bi/2, btn_cz-bi/2]) cube([lip_h, bi, lip]);
+        translate([-bi/2, bi/2 - lip, btn_can+clampc]) cube([bi, lip, lip_h]);
+        translate([-bi/2, -bi/2,      btn_can+clampc]) cube([bi, lip, lip_h]);
+    }
 }
 module scd_seat() {       // плата на сенсоре; язычки от перегородки прижимают
     zt  = floor_t + can_h + scd_t + clampc;
@@ -234,9 +251,9 @@ module top_beads() {
     for (tx = [outer_w/2 - 16, outer_w/2 + 16])
         translate([tx - tab_w/2 - 0.5, wall + inner_h - bead_in, bz]) cube([tab_w+1, bead_in, bead_z]);
 }
-module emboss() {         // рельеф на лице, под решёткой, по центру
-    translate([outer_w/2, grille_cy - grille_slot_h/2 - 4, floor_t - 0.4])
-        linear_extrude(0.9) text(label, size = 5.5, halign = "center", valign = "center");
+module emboss() {         // ВЫПУКЛАЯ надпись СНАРУЖИ лица, слева-снизу (зеркально кнопке)
+    translate([label_cx, label_cy, -0.8])
+        linear_extrude(1.3) text(label, size = 6, halign = "center", valign = "center");
 }
 
 // ============================================================
@@ -247,7 +264,7 @@ module shell() {
         union() {
             // полая скруглённая оболочка
             difference() {
-                rbody(outer_w, outer_h, outer_d, r_v);
+                outer_body();
                 translate([wall, wall, floor_t]) rbody(inner_w, inner_h, outer_d, max(r_v - wall, 1));
             }
             // внутренние фичи ОБРЕЗАНЫ по форме корпуса (не вылезают за скругления)
