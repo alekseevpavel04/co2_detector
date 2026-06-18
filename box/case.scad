@@ -84,11 +84,14 @@ win_y = wall + inner_h - act_h - 5;             // ~5 мм от верха
 epd_x = win_x - act_ox;
 epd_y = win_y - act_oy;
 
-// SCD — низ-центр, сенсор по центру X (за решёткой)
-can_cx = outer_w/2;
-can_cy = wall + fit + scd_w/2;                  // низ
-scd_x  = can_cx - (scd_l - scd_can_off - can/2);   // плата так, чтобы сенсор был по центру
-scd_y  = wall + fit;
+// Решётка датчика — по центру X, ПОД платой экрана (не у самого низа)
+grille_cx = outer_w/2;
+grille_cy = epd_y - 8.5;
+// SCD — сенсором за решёткой (по центру), плата опирается на сенсор
+can_cx = grille_cx;
+can_cy = grille_cy;
+scd_x  = can_cx - (scd_l - scd_can_off - can/2);
+scd_y  = can_cy - scd_w/2;
 
 // ESP — низ-право, USB в правый торец
 esp_x = wall + inner_w - esp_l - fit;
@@ -98,10 +101,6 @@ esp_y = wall + fit;
 btn_sx = 0;                                     // левый торец (X=0)
 btn_cy = wall + inner_h/2;                      // по центру высоты
 btn_cz = floor_t + chamber_d/2;                 // середина отсека по глубине
-
-// Решётка датчика — на лице, по центру, над сенсором
-grille_cx = outer_w/2;
-grille_cy = can_cy;
 
 // Батарея — по центру
 bat_x = wall + (inner_w - bat_l)/2;
@@ -246,15 +245,22 @@ module emboss() {         // рельеф на лице, под решёткой
 module shell() {
     difference() {
         union() {
+            // полая скруглённая оболочка
             difference() {
                 rbody(outer_w, outer_h, outer_d, r_v);
                 translate([wall, wall, floor_t]) rbody(inner_w, inner_h, outer_d, max(r_v - wall, 1));
             }
-            scd_chamber(); button_mount(); scd_seat();
-            shelf_ledges(); bottom_lip(); top_beads();
-            emboss();
+            // внутренние фичи ОБРЕЗАНЫ по форме корпуса (не вылезают за скругления)
+            intersection() {
+                union() {
+                    scd_chamber(); button_mount(); scd_seat();
+                    shelf_ledges(); bottom_lip(); top_beads();
+                }
+                rbody(outer_w, outer_h, outer_d, r_v);
+            }
+            emboss();   // выпуклая надпись наружу — не обрезаем
         }
-        window_cut(); grille_cut(); scd_port_cut();
+        window_cut(); grille_cut();
         usb_cut(); button_hole(); switch_slot(); vents_side();
     }
 }
@@ -265,12 +271,15 @@ module shell() {
 module shelf() {
     cl = 0.4;
     difference() {
-        union() {
-            translate([wall + cl, wall + cl, shelf_z]) rbody(inner_w - 2*cl, inner_h - 2*cl, shelf_t, max(r_v-wall-cl,1));
-            translate([bat_x + 3, bat_y - batt_rib, shelf_z + shelf_t]) cube([bat_l - 6, batt_rib, 3]);
-            translate([bat_x + 3, bat_y + bat_w,    shelf_z + shelf_t]) cube([bat_l - 6, batt_rib, 3]);
-            translate([bat_x - batt_rib, bat_y + 3, shelf_z + shelf_t]) cube([batt_rib, bat_w - 6, 3]);
-            translate([bat_x + bat_l,    bat_y + 3, shelf_z + shelf_t]) cube([batt_rib, bat_w - 6, 3]);
+        intersection() {                          // всё в пределах формы полки
+            union() {
+                translate([wall + cl, wall + cl, shelf_z]) rbody(inner_w - 2*cl, inner_h - 2*cl, shelf_t, max(r_v-wall-cl,1));
+                translate([bat_x + 3, bat_y - batt_rib, shelf_z + shelf_t]) cube([bat_l - 6, batt_rib, 3]);
+                translate([bat_x + 3, bat_y + bat_w,    shelf_z + shelf_t]) cube([bat_l - 6, batt_rib, 3]);
+                translate([bat_x - batt_rib, bat_y + 3, shelf_z + shelf_t]) cube([batt_rib, bat_w - 6, 3]);
+                translate([bat_x + bat_l,    bat_y + 3, shelf_z + shelf_t]) cube([batt_rib, bat_w - 6, 3]);
+            }
+            translate([wall + cl, wall + cl, shelf_z]) rbody(inner_w - 2*cl, inner_h - 2*cl, shelf_t + 4, max(r_v-wall-cl,1));
         }
         translate([wall + 5, wall + cl - 1, shelf_z - 1]) cube([wire_w, 6, shelf_t + 2]);
         translate([outer_w/2, wall + inner_h/2, shelf_z - 1]) cylinder(d = finger_d, h = shelf_t + 2);
