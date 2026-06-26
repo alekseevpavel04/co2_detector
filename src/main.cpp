@@ -171,7 +171,12 @@
 #define AVG_WINDOW_24H       288     // raw за 24 часа
 #define AVG_WINDOW_7D        2016    // raw за 7 дней
 
-// --- Геометрия экрана (после setRotation(1) — 250×122) ---
+// --- Геометрия экрана (после setRotation — 250×122) ---
+// Поворот панели. 1 = «обычная» альбомная ориентация, 3 = перевёрнутая на 180°.
+// В собранном корпусе экран установлен ВВЕРХ НОГАМИ, поэтому 3 (картинка
+// переворачивается, все координаты ниже остаются прежними — GFX сам
+// трансформирует). Если соберёшь иначе — поставь 1.
+#define EPD_ROTATION   3
 #define SCREEN_W       250
 #define SCREEN_H       122
 
@@ -294,7 +299,7 @@ static void init_sensor() {
 static void init_display() {
     SPI.begin(PIN_EPD_SCK, -1, PIN_EPD_MOSI, PIN_EPD_CS);
     display.init(115200, /*initial=*/true, 10, false);
-    display.setRotation(1);
+    display.setRotation(EPD_ROTATION);
     display.setTextColor(GxEPD_BLACK);
 }
 
