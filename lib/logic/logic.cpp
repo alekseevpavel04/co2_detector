@@ -163,3 +163,12 @@ int cycle_period(int current_screen) {
     period_idx = (period_idx + 1) % N_PERIODS;
     return param_idx * N_PERIODS + period_idx;
 }
+
+// ------------------------------------------------------------
+// Навигация одной кнопкой (новый UI)
+// ------------------------------------------------------------
+int cycle_screen(int current_screen, int n_screens) {
+    if (n_screens <= 0) return 0;
+    if (current_screen < 0 || current_screen >= n_screens) return 0;
+    return (current_screen + 1) % n_screens;
+}

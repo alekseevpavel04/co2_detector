@@ -448,6 +448,35 @@ void test_cycle_period_is_modulo_3(void) {
 }
 
 // ------------------------------------------------------------
+// Новый UI — навигация одной кнопкой по 4 экранам (main + 3 графика)
+// ------------------------------------------------------------
+void test_cycle_screen_basic_loop(void) {
+    // 0(main) → 1(1h) → 2(24h) → 3(7d) → 0
+    TEST_ASSERT_EQUAL_INT(1, cycle_screen(0, 4));
+    TEST_ASSERT_EQUAL_INT(2, cycle_screen(1, 4));
+    TEST_ASSERT_EQUAL_INT(3, cycle_screen(2, 4));
+    TEST_ASSERT_EQUAL_INT(0, cycle_screen(3, 4));
+}
+
+void test_cycle_screen_garbage_protection(void) {
+    // Мусор в current (RTC memory) → 0.
+    TEST_ASSERT_EQUAL_INT(0, cycle_screen(-1, 4));
+    TEST_ASSERT_EQUAL_INT(0, cycle_screen(4, 4));
+    TEST_ASSERT_EQUAL_INT(0, cycle_screen(999, 4));
+    // Некорректное число экранов → 0.
+    TEST_ASSERT_EQUAL_INT(0, cycle_screen(1, 0));
+    TEST_ASSERT_EQUAL_INT(0, cycle_screen(1, -3));
+}
+
+void test_cycle_screen_full_cycle_returns_to_start(void) {
+    // 4-кратное нажатие возвращает к исходному экрану.
+    for (int s = 0; s < 4; s++) {
+        int r = cycle_screen(cycle_screen(cycle_screen(cycle_screen(s, 4), 4), 4), 4);
+        TEST_ASSERT_EQUAL_INT(s, r);
+    }
+}
+
+// ------------------------------------------------------------
 // Этап 14 — интеграционный тест: синтетический месяц данных
 // ------------------------------------------------------------
 // Генерируем 30 дней × 288 = 8640 «измерений» с правдоподобным
@@ -619,6 +648,10 @@ int main(int argc, char** argv) {
     RUN_TEST(test_cycle_invalid_returns_zero);
     RUN_TEST(test_cycle_param_is_modulo_3);
     RUN_TEST(test_cycle_period_is_modulo_3);
+
+    RUN_TEST(test_cycle_screen_basic_loop);
+    RUN_TEST(test_cycle_screen_garbage_protection);
+    RUN_TEST(test_cycle_screen_full_cycle_returns_to_start);
 
     return UNITY_END();
 }
