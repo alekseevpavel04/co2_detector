@@ -8,7 +8,14 @@
 #include <SensirionErrors.h>
 #include <GxEPD2_BW.h>
 #include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSans12pt7b.h>
+#include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSansBold24pt7b.h>
+#include <Fonts/Picopixel.h>
+#include "main_screen.h"
+#include "graph24_shell.h"
+#include "graph7d_shell.h"
 
 #include <vector>
 #include <algorithm>
@@ -83,8 +90,36 @@
 // После сборки сравни показание с отдельным термометром и подкрути это число
 // (если прибор показывает на X° меньше реального — УМЕНЬШИ офсет на X).
 #define TEMPERATURE_OFFSET      0.0f
+
+// Калибровка влажности. У SCD41 НЕТ аппаратного регистра офсета для RH (только
+// для температуры), поэтому правим программно: это число (в % RH) прибавляется
+// к показанию датчика — и на экране, и в файле, чтобы история была единообразной.
+// RH в общем корпусе с тёплым ESP/экраном обычно ЗАНИЖЕН (тёплый воздух → ниже
+// относительная влажность). После сборки сравни с отдельным гигрометром и
+// подкрути: прибор показывает на X% МЕНЬШЕ реального → УВЕЛИЧЬ офсет на X.
+#define HUMIDITY_OFFSET         0.0f
+
+// --- Режим НАСТРОЙКИ (для итеративной доводки UI по USB) ---
+// 1 = плата НЕ уходит в сон вообще, CPU держим на 240 МГц → USB-CDC порт
+//     стабильно поднят и не пропадает. Это позволяет перепрошивать прибор
+//     сколько угодно раз без «ловли» окна пробуждения. На экране — "TUNING
+//     MODE" + живые значения.
+//     ТЕПЕРЬ режим переключается НА ЛЕТУ: удерживай кнопку ~10 c — прибор
+//     уйдёт в SETUP (без сна, USB живой); удержишь ещё раз — вернётся в
+//     нормальный. Флаг живёт в RTC-памяти (переживает deep sleep, сбрасывается
+//     при полном обесточивании). Значение ниже — лишь ДЕФОЛТ при первой
+//     загрузке / после снятия батарей (0 = нормальный режим).
+#define TUNING_MODE             0
+#define LONG_PRESS_MS           10000      // мс — удержание для смены режима (~10 c)
 #define AVERAGE_RECALC_INTERVAL 86400      // пересчёт средних раз в сутки
 #define BUTTON_RELEASE_TIMEOUT  3000       // мс — сколько ждём отпускания
+
+// --- Тестовая синтетика для проверки графиков ---
+// 1 = при старте (если ещё не засеяно) затереть /data и записать 7 суток
+// синтетических данных (часовой цикл + многосуточный тренд). Меняешь паттерн —
+// подними SEED_VERSION, чтобы пересеять. ПЕРЕД боевым использованием → 0.
+#define SEED_SYNTHETIC          0
+#define SEED_VERSION            3
 
 // --- Экономия экрана (e-Paper держит картинку даром; full refresh дорогой) ---
 // По таймеру перерисовываем только если значение заметно изменилось, либо
@@ -99,15 +134,16 @@
 // С B73 контроллер отрабатывает обновление, но стекло остаётся пустым.
 #define EPD_DRIVER     GxEPD2_213_BN
 
-#define RTC_MAGIC      0xDEADBEEF
+#define RTC_MAGIC      0xDEADBEF1   // bump при изменении набора RTC-переменных (форсит чистый init)
 // Новый UI: 4 экрана, всё про CO2.
 //   0 — MAIN (крупное текущее значение + статус)
 //   1 — график CO2 за 1 час
 //   2 — график CO2 за 24 часа
 //   3 — график CO2 за 7 дней
 // Одна кнопка (GPIO5) листает экраны по кругу. По таймеру всегда
-// возвращаемся на MAIN.
-#define N_SCREENS      4
+// возвращаемся на MAIN. Экраны: 0=MAIN, 1=график 24ч, 2=график 7д.
+// (График за 1ч убран — при 15-мин интервале там всего 4 точки.)
+#define N_SCREENS      3
 #define SCREEN_MAIN    0
 
 // --- Хранилище ---
@@ -220,6 +256,7 @@ RTC_DATA_ATTR float    last_shown_t     = 0.0f;
 RTC_DATA_ATTR float    last_shown_h     = 0.0f;
 RTC_DATA_ATTR bool     last_shown_alert = false;
 RTC_DATA_ATTR int      last_shown_screen = -1;   // какой экран сейчас на стекле
+RTC_DATA_ATTR uint32_t tuning_mode = 0;          // 0=норм, 1=SETUP (без сна); смена долгим нажатием
 
 // AverageCache: точное хранилище уже отрисовываемых точек.
 // uint16 для CO2 (ppm), int16 для T*10 (десятые градуса),
@@ -394,6 +431,52 @@ static void rotate_files() {
         }
     }
 }
+
+#if SEED_SYNTHETIC
+// Тестовая засевка: затираем /data и пишем 7 суток синтетики (часовой цикл +
+// плавный многосуточный тренд). Срабатывает ОДИН раз на версию (маркер-файл),
+// чтобы не пересевать каждую загрузку. Нужна только для проверки графиков.
+static void seed_synthetic_once() {
+    char marker[24];
+    snprintf(marker, sizeof(marker), "/seed_v%d", SEED_VERSION);
+    if (LittleFS.exists(marker)) { Serial.println("Synthetic: already seeded"); return; }
+    Serial.println("Synthetic: seeding 7 days of data...");
+
+    for (int n : list_data_file_numbers()) {          // затираем старое
+        std::string p = make_filename(n);
+        LittleFS.remove(p.c_str());
+    }
+    cached_file_path[0] = '\0';
+
+    const int TOTAL = (7 * 24 * 3600) / MEASUREMENT_INTERVAL;   // 672 записи (7 сут)
+    const int DAY_RECS  = (24 * 3600) / MEASUREMENT_INTERVAL;   // 96 записей = суточный цикл
+    const float P2 = 6.2831853f;                                 // 2π (TWO_PI занят Arduino)
+
+    std::string path = make_filename(1);
+    File f = LittleFS.open(path.c_str(), "w", /*create=*/true);
+    if (!f) { Serial.println("Synthetic: open failed"); return; }
+
+    for (int i = 0; i < TOTAL; i++) {
+        float daily = 250.0f * sinf(P2 * (float)i / (float)DAY_RECS);    // ±250 за сутки (1 цикл/день)
+        float trend = (float)i * (180.0f / (float)TOTAL);                // +180 за 7 сут (небольшой тренд)
+        int co2 = 600 + (int)(daily + trend);
+        if (co2 < 400) co2 = 400;
+
+        Measurement m{};
+        m.timestamp = (uint32_t)i * MEASUREMENT_INTERVAL;
+        m.co2 = (uint16_t)co2;
+        m.temp_x10 = (int16_t)(230 + 30.0f * sinf(P2 * (float)i / (float)DAY_RECS));
+        m.humidity = (uint8_t)(45 + (int)(10.0f * sinf(P2 * (float)i / (float)DAY_RECS)));
+        m.flags = 0;
+        f.write(reinterpret_cast<uint8_t*>(&m), sizeof(m));
+    }
+    f.close();
+
+    File mk = LittleFS.open(marker, "w", /*create=*/true);
+    if (mk) mk.close();
+    Serial.printf("Synthetic: wrote %d records to %s\n", TOTAL, path.c_str());
+}
+#endif
 
 // Читаем последние n записей из файла. Использует seek чтобы не
 // тянуть весь файл в RAM (важно для 7-дневного графика — 2016 записей,
@@ -618,6 +701,11 @@ static bool take_measurement(uint16_t& co2, float& t, float& h) {
             continue;
         }
 
+        // Программная калибровка влажности (см. HUMIDITY_OFFSET).
+        h += HUMIDITY_OFFSET;
+        if (h < 0.0f)   h = 0.0f;
+        if (h > 100.0f) h = 100.0f;
+
         return true;
     }
 
@@ -710,128 +798,158 @@ static std::vector<Measurement> load_recent_measurements(int n) {
     return result;
 }
 
-// Один светофор: 3 точки диаметром 4 px (radius 2), шаг 6.
-// level: 0 = плохо (1 закрашена), 1 = терпимо (2), 2 = хорошо (3).
-// level = -1 — все пустые (нет валидных данных).
-static void draw_traffic_light(int x, int y, int level) {
-    int filled = (level < 0) ? 0 : level + 1;
-    for (int i = 0; i < 3; i++) {
-        int dot_x = x + i * 6;
-        if (i < filled) display.fillCircle(dot_x, y, 2, GxEPD_BLACK);
-        else            display.drawCircle(dot_x, y, 2, GxEPD_BLACK);
+// Крупное число CO2 (размер 3) пиксельным шрифтом из шаблона. Цифры рисуются
+// моноширинно справа налево: правый край последней цифры — у x_right, верх y_top.
+// drawBitmap с одним цветом прозрачен по нулевым битам — фон оболочки не затирается.
+static void draw_num_big(uint16_t v, int x_right, int y_top) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%u", v);
+    for (int i = static_cast<int>(strlen(buf)) - 1; i >= 0; i--) {
+        int d = buf[i] - '0';
+        int w = DIG3_W[d];
+        display.drawBitmap(x_right - w + 1, y_top, DIG3[d], w, DIG3_H, GxEPD_BLACK);
+        x_right -= DIG3_PITCH;
     }
 }
 
-// Печать строки по центру по X на заданной baseline-Y текущим шрифтом/размером.
-static void print_centered(const char* s, int baseline_y) {
-    int16_t x1, y1; uint16_t w, h;
-    display.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-    int x = (SCREEN_W - static_cast<int>(w)) / 2 - x1;
-    display.setCursor(x, baseline_y);
-    display.print(s);
-}
-
-// Пунктирная горизонтальная линия-ориентир на уровне value (если в шкале).
-static void draw_dashed_h(float v, int lo, int hi, int dash) {
-    if (hi <= lo || v < lo || v > hi) return;
-    int y = co2_value_to_y(v, lo, hi);
-    int step = dash * 2;
-    for (int x = PLOT_X; x < PLOT_X + PLOT_W; x += step) {
-        int xe = x + dash - 1;
-        if (xe > PLOT_X + PLOT_W - 1) xe = PLOT_X + PLOT_W - 1;
-        display.drawLine(x, y, xe, y, GxEPD_BLACK);
+// Мелкое число (размер 2) для температуры/влажности. Поддерживает цифры, знак
+// '+'/'-' (по центру ячейки) и точку '.' (у базовой линии) — как в макете.
+static void draw_num_small(const char* s, int x_right, int y_top) {
+    for (int i = static_cast<int>(strlen(s)) - 1; i >= 0; i--) {
+        char c = s[i];
+        if (c >= '0' && c <= '9') {
+            int d = c - '0';
+            int w = DIG2_W[d];
+            display.drawBitmap(x_right - w + 1, y_top, DIG2[d], w, DIG2_H, GxEPD_BLACK);
+        } else if (c == '.') {
+            display.drawBitmap(x_right - 6, y_top + 12, DOT2,   DOT2_W,   DOT2_H,   GxEPD_BLACK);
+        } else if (c == '+') {
+            display.drawBitmap(x_right - 9, y_top + 3,  PLUS2,  PLUS2_W,  PLUS2_H,  GxEPD_BLACK);
+        } else if (c == '-') {
+            display.drawBitmap(x_right - 9, y_top + 6,  MINUS2, MINUS2_W, MINUS2_H, GxEPD_BLACK);
+        }
+        x_right -= DIG2_PITCH;
     }
 }
 
-// Кривая CO2. Данные растягиваются на ВСЮ ширину графика, если их хватает
-// на полное окно (cap записей). Если меньше — линия прижата к «now» справа,
-// слева честно пусто (история ещё копится). Это чинит старый баг, где 144
-// точки занимали лишь ~60% ширины и слева всегда оставалась пустота.
-static void draw_co2_curve(const std::vector<float>& vals, int cap, int lo, int hi) {
-    int m = static_cast<int>(vals.size());
-    if (m < 1 || cap < 2) return;
-    int x_right = PLOT_X + PLOT_W - 1;
-    float px_per_rec = (float)(PLOT_W - 1) / (float)(cap - 1);  // пикселей на запись
-    int x_old = x_right - (int)((m - 1) * px_per_rec + 0.5f);
-    if (x_old < PLOT_X) x_old = PLOT_X;
-
-    int prev_x = -1, prev_y = -1;
-    for (int x = x_old; x <= x_right; x++) {
-        // Обратное отображение X → дробный индекс в vals (0 = newest справа).
-        float age = (float)(x_right - x) / px_per_rec;
-        float idx = (float)(m - 1) - age;
-        if (idx < 0.0f) idx = 0.0f;
-        if (idx > (float)(m - 1)) idx = (float)(m - 1);
-        int i0 = (int)idx;
-        int i1 = (i0 + 1 < m) ? i0 + 1 : i0;
-        float f = idx - (float)i0;
-        float v = vals[i0] * (1.0f - f) + vals[i1] * f;
-        int y = co2_value_to_y(v, lo, hi);
-        if (prev_x >= 0) display.drawLine(prev_x, prev_y, x, y, GxEPD_BLACK);
-        prev_x = x; prev_y = y;
+// Постоянный индикатор режима: если прибор в SETUP (без сна) — рамка по
+// периметру на ЛЮБОМ экране + (опционально) бейдж "SETUP" в углу. В нормальном
+// режиме ничего не рисуем (чистый экран). Так режим виден всегда, а не только
+// в момент переключения. Вызывать внутри firstPage/nextPage перед закрытием.
+static void draw_mode_overlay(bool with_badge) {
+    if (!tuning_mode) return;
+    display.drawRect(0, 0, SCREEN_W, SCREEN_H, GxEPD_BLACK);
+    display.drawRect(1, 1, SCREEN_W - 2, SCREEN_H - 2, GxEPD_BLACK);
+    if (with_badge) {
+        display.setFont(&Picopixel);
+        int16_t bx, by; uint16_t bw, bh;
+        display.getTextBounds("SETUP", 0, 0, &bx, &by, &bw, &bh);
+        int w = static_cast<int>(bw) + 6, x = SCREEN_W - 5 - w, y = 4;
+        display.fillRect(x, y, w, 9, GxEPD_BLACK);
+        display.setTextColor(GxEPD_WHITE);
+        display.setCursor(x + 3, y + 7);
+        display.print("SETUP");
+        display.setTextColor(GxEPD_BLACK);
     }
 }
 
-// ===== Экран 0: MAIN — крупное текущее значение CO2 =====
-static void draw_main(bool valid, uint16_t co2) {
+// ===== Экран 0: MAIN — маскот слева + крупное CO2 + T/RH снизу =====
+// Раскладка: отступ сверху ~16px (рамка корпуса режет край), без рубящей
+// линии-разделителя; внизу — мелкие капс-подписи TEMP/HUMIDITY (watch-стиль).
+static void draw_main(bool valid, uint16_t co2, float t, float h) {
+    // Уровень → оболочка (своя картинка кота + статичные подписи/юниты, в bad
+    // ещё и плашка NEED AIR). Пороги: good < 700, norm < 1200, иначе bad.
+    // MAIN_Y_* — верх ячеек {CO2, темп, влажность} именно этой оболочки: блок
+    // чисел в каждом макете может стоять на своей высоте, числа привязаны к ней.
+    const unsigned char* shell = MAIN_SHELL_FINE;
+    const int* ys = MAIN_Y_FINE;
+    if (valid) {
+        if (co2 < 700)       { shell = MAIN_SHELL_GOOD; ys = MAIN_Y_GOOD; }
+        else if (co2 < 1200) { shell = MAIN_SHELL_FINE; ys = MAIN_Y_FINE; }
+        else                 { shell = MAIN_SHELL_BAD;  ys = MAIN_Y_BAD;  }
+    }
+
     display.setFullWindow();
     display.firstPage();
     do {
         display.fillScreen(GxEPD_WHITE);
-        display.setTextColor(GxEPD_BLACK);
+        // Оболочка целиком (1:1 из макета пользователя)
+        display.drawBitmap(0, 0, shell, MAINSCR_W, MAINSCR_H, GxEPD_BLACK);
 
-        // Верхняя строка: "CO2" слева, светофор справа.
-        display.setFont(&FreeSans9pt7b);
-        display.setTextSize(1);
-        display.setCursor(PAD_L, 17);
-        display.print("CO2");
-        int lvl = valid ? get_co2_traffic_level(co2) : -1;
-        draw_traffic_light(SCREEN_W - PAD_R - 14, 11, lvl);
+        if (valid) {
+            // Живые числа поверх оболочки, выровнены вправо к x=202 (юниты с x=206).
+            draw_num_big(co2, 202, ys[0]);                    // CO2 (размер 3)
 
-        // Крупное число по центру.
-        char num[8];
-        if (valid) snprintf(num, sizeof(num), "%u", co2);
-        else       snprintf(num, sizeof(num), "--");
-        display.setFont(&FreeSansBold12pt7b);
-        display.setTextSize(2);
-        print_centered(num, 74);
+            char tbuf[12];
+            snprintf(tbuf, sizeof(tbuf), "%+.1f", t);         // напр. "+24.3" / "-5.0"
+            draw_num_small(tbuf, 202, ys[1]);                 // температура (размер 2)
 
-        // "ppm" под числом.
-        display.setFont(&FreeSans9pt7b);
-        display.setTextSize(1);
-        print_centered("ppm", 92);
-
-        // Нижняя строка: статус, либо инверсная плашка VENTILATE при алерте.
-        if (alert_active) {
-            display.fillRect(0, 100, SCREEN_W, SCREEN_H - 100, GxEPD_BLACK);
-            display.setTextColor(GxEPD_WHITE);
-            display.setFont(&FreeSans9pt7b);
-            print_centered(UI_ALERT_TEXT, 116);
-            display.setTextColor(GxEPD_BLACK);
-        } else {
-            display.setFont(&FreeSans9pt7b);
-            print_centered(valid ? co2_status_word(co2) : "NO DATA", 116);
+            char hbuf[8];
+            snprintf(hbuf, sizeof(hbuf), "%d", static_cast<int>(h + 0.5f));
+            draw_num_small(hbuf, 202, ys[2]);                 // влажность (размер 2)
         }
+
+        draw_mode_overlay(true);   // рамка + бейдж "SETUP", если в режиме настройки
     } while (display.nextPage());
     display.hibernate();
 }
 
-// ===== Экраны 1..3: график CO2 за 1h / 24h / 7d =====
-static void draw_graph(int period_idx, bool valid, uint16_t co2) {
+// ===== Экраны 1..3: график CO2 — тонкие бары, ПОЗИЦИОННАЯ ось времени =====
+// Берём последние N записей ПО ПОЗИЦИИ в файле, а НЕ по timestamp: uptime
+// сбрасывается при смене батарей, поэтому метки времени между сессиями
+// ненадёжны. Замеры идут с фиксированным шагом MEASUREMENT_INTERVAL, значит
+// N последних записей ≈ окно N*interval. Свежая запись — справа ("now"), дальше
+// по одной влево. Это устойчиво к сбросу времени; плотных «фейковых» точек нет
+// (в SETUP мы замеры больше не сохраняем). Стиль watch-UI: уровни слева, бары.
+static void draw_graph(int period_idx, bool valid, uint16_t co2, float t, float h) {
+    (void)valid; (void)co2; (void)t; (void)h;
     if (period_idx < 0 || period_idx > 2) period_idx = 0;
 
-    // Сколько записей нужно на окно (зависит от реального интервала замера).
-    int cap = (int)(GRAPH_WINDOW_SEC[period_idx] / (long)MEASUREMENT_INTERVAL);
-    if (cap < 2) cap = 2;
+    // Сколько записей укладывается в окно при штатном интервале замеров.
+    int n_target = (int)(GRAPH_WINDOW_SEC[period_idx] / MEASUREMENT_INTERVAL);
+    if (n_target < 2) n_target = 2;
 
-    std::vector<float> vals;
-    if (fs_ok) {
-        auto ms = load_recent_measurements(cap);
-        vals = extract_co2_values(ms);
+    std::vector<Measurement> ms;
+    if (fs_ok) ms = load_recent_measurements(n_target);
+
+    // Геометрия (увеличенный верхний отступ — край режется корпусом).
+    const int PX = 30, PR = 8, PY = 33, PB = 100;
+    const int PW = SCREEN_W - PX - PR, PH = PB - PY;
+    // Столбцов на экране: мало записей → шире бары, много → тоньше (с
+    // агрегацией). Шаг ЦЕЛОЧИСЛЕННЫЙ — иначе бары встают неравномерно и в
+    // гребёнке появляются «проплешины».
+    int nb = (n_target < PW / 3) ? n_target : PW / 3;
+    if (nb < 1) nb = 1;
+    int pitch = PW / nb;                               // целый шаг (ровная гребёнка)
+
+    // Раскладываем по столбцам ПО ПОЗИЦИИ: свежая запись (последняя) — в правый
+    // край, остальные левее пропорционально их «возрасту в записях». Если
+    // записей меньше окна — слева остаётся пусто (история ещё копится), честно.
+    std::vector<float> ssum(nb, 0.0f);
+    std::vector<int>   cnt(nb, 0);
+    int lo = 400, hi = 1000;
+    int m = static_cast<int>(ms.size());
+    if (m > 0) {
+        float dmax = 0.0f;
+        for (int j = 0; j < m; j++) {
+            int age_recs = (m - 1) - j;                       // 0 = самая свежая
+            float frac = (n_target > 1) ? (float)age_recs / (float)(n_target - 1) : 0.0f;
+            if (frac > 1.0f) frac = 1.0f;
+            int col = (nb - 1) - (int)(frac * (nb - 1) + 0.5f);
+            if (col < 0) col = 0;
+            if (col >= nb) col = nb - 1;
+            ssum[col] += ms[j].co2; cnt[col]++;
+            if (ms[j].co2 > dmax) dmax = ms[j].co2;
+        }
+        hi = (int)((dmax + 100.0f) / 200.0f + 1.0f) * 200;   // кратно 200, с запасом
+        if (hi < 1000) hi = 1000;
+        if (hi > 5000) hi = 5000;
     }
-
-    int lo, hi;
-    co2_auto_scale(vals, lo, hi);
+    auto vy = [&](float v) -> int {
+        if (v < lo) v = lo;
+        if (v > hi) v = hi;
+        return PB - (int)((v - lo) * (long)PH / (hi - lo));
+    };
 
     display.setFullWindow();
     display.firstPage();
@@ -840,66 +958,149 @@ static void draw_graph(int period_idx, bool valid, uint16_t co2) {
         display.setTextColor(GxEPD_BLACK);
         display.setTextSize(1);
 
-        // --- Заголовок ---
-        if (alert_active) {
-            // Алерт виден на любом экране: инверсная плашка вверху.
-            display.fillRect(0, 0, SCREEN_W, PAD_T - 2, GxEPD_BLACK);
-            display.setTextColor(GxEPD_WHITE);
-            display.setFont(&FreeSans9pt7b);
-            print_centered(UI_ALERT_TEXT, 14);
-            display.setTextColor(GxEPD_BLACK);
-        } else {
-            display.setFont(&FreeSans9pt7b);
-            display.setCursor(PAD_L, 14);
-            display.printf("CO2  %s", GRAPH_PERIOD_LBL[period_idx]);
-            if (valid) {
-                char cur[12];
-                snprintf(cur, sizeof(cur), "%u ppm", co2);
-                int16_t x1, y1; uint16_t w, h;
-                display.getTextBounds(cur, 0, 0, &x1, &y1, &w, &h);
-                display.setCursor(SCREEN_W - PAD_R - (int)w - x1, 14);
-                display.print(cur);
+        // Шапка: "CO2" слева, период справа (период — только здесь), линейка
+        display.setFont(&FreeSansBold9pt7b);
+        display.setCursor(8, 20);
+        display.print("CO2");
+        const char* pl = GRAPH_PERIOD_LBL[period_idx];
+        display.setFont(&FreeSans9pt7b);
+        int16_t lx, ly; uint16_t lw, lh;
+        display.getTextBounds(pl, 0, 0, &lx, &ly, &lw, &lh);
+        display.setCursor(242 - static_cast<int>(lw), 20);
+        display.print(pl);
+        display.drawLine(8, 25, SCREEN_W - 9, 25, GxEPD_BLACK);
+
+        // Уровни (4 полосы) — пунктир + мелкие подписи слева (Picopixel)
+        int step = (hi - lo) / 4;
+        display.setFont(&Picopixel);
+        for (int k = 0; k <= 4; k++) {
+            int lvl = lo + step * k;
+            int yy = vy((float)lvl);
+            for (int x = PX; x < PX + PW; x += 5) display.drawPixel(x, yy, GxEPD_BLACK);
+            char lab[8]; snprintf(lab, sizeof(lab), "%d", lvl);
+            int16_t bx, byy; uint16_t bw, bh;
+            display.getTextBounds(lab, 0, 0, &bx, &byy, &bw, &bh);
+            display.setCursor(PX - 3 - static_cast<int>(bw), yy + 2);
+            display.print(lab);
+        }
+        // Порог VENTILATE (1500) — заметнее остальных линий
+        if (lo < ALERT_CO2_ON && ALERT_CO2_ON < hi) {
+            int yy = vy((float)ALERT_CO2_ON);
+            for (int x = PX; x < PX + PW; x += 3) {
+                display.drawPixel(x, yy, GxEPD_BLACK);
+                display.drawPixel(x + 1, yy, GxEPD_BLACK);
             }
         }
 
-        // --- Оси (L-образные: слева и снизу) ---
-        display.drawLine(PLOT_X, PLOT_Y, PLOT_X, PLOT_B, GxEPD_BLACK);
-        display.drawLine(PLOT_X, PLOT_B, PLOT_X + PLOT_W - 1, PLOT_B, GxEPD_BLACK);
-
-        // --- Подписи Y (верх/низ шкалы), мелкий встроенный шрифт ---
-        display.setFont();
-        display.setCursor(0, PLOT_Y - 2);
-        display.printf("%d", hi);
-        display.setCursor(0, PLOT_B - 6);
-        display.printf("%d", lo);
-
-        // --- Ориентир: порог VENTILATE (если попадает в шкалу) ---
-        draw_dashed_h((float)ALERT_CO2_ON, lo, hi, 4);
-
-        // --- Кривая данных ---
-        if (!vals.empty()) {
-            draw_co2_curve(vals, cap, lo, hi);
-        } else {
-            display.setFont();
-            display.setCursor(PLOT_X + 24, PLOT_Y + PLOT_H / 2);
+        // Бары по столбцам (ширина = шаг−1px, ровный зазор)
+        int drawn = 0;
+        int bw = pitch - 1;
+        if (bw < 1) bw = 1;
+        for (int col = 0; col < nb; col++) {
+            if (cnt[col] == 0) continue;
+            int x = PX + col * pitch;
+            int y = vy(ssum[col] / cnt[col]);
+            display.fillRect(x, y, bw, PB - y, GxEPD_BLACK);
+            drawn++;
+        }
+        // Базовая линия
+        display.drawLine(PX, PB, PX + PW - 1, PB, GxEPD_BLACK);
+        if (drawn == 0) {
+            display.setFont(&FreeSans9pt7b);
+            display.setCursor(PX + 24, PY + PH / 2);
             display.print("collecting data...");
         }
 
-        // --- Подписи X ---
-        display.setFont();
-        display.setCursor(PLOT_X, PLOT_B + 4);
-        display.print(GRAPH_XLEFT_LBL[period_idx]);
-        display.setCursor(PLOT_X + PLOT_W - 18, PLOT_B + 4);
+        // Ось X: только "now" справа (период уже в шапке)
+        display.setFont(&FreeSans9pt7b);
+        int16_t ax, ay; uint16_t aw, ah;
+        display.getTextBounds("now", 0, 0, &ax, &ay, &aw, &ah);
+        display.setCursor(PX + PW - static_cast<int>(aw), PB + 13);
         display.print("now");
+
+        draw_mode_overlay(false);  // только рамка (бейдж не лепим — в шапке период)
     } while (display.nextPage());
     display.hibernate();
 }
 
-// Диспетчер: какой из 4 экранов рисовать.
-static void draw_current_screen(int screen, bool valid, uint16_t co2) {
+// ===== Графики 24ч/7д — пиксельная оболочка из шаблона + заливка под кривой =====
+// Оболочка (рамка, заголовок, подписи осей, сетка) вшита 1:1 битмапой. Поверх —
+// заливка по данным ПО ПОЗИЦИИ (свежее справа). Шкала ФИКСИРОВАННАЯ под шаблон:
+// 400..2000 ppm, база y=99, верх y=39. n_target = окно / интервал замеров.
+static void draw_graph_template(const unsigned char* shell, int sw, int sh, int n_target) {
+    const int PXL = 33, PXR = 239, BASE = 99, TOPY = 39;
+    const int VMIN = 400, VMAX = 2000;
+    if (n_target < 2) n_target = 2;
+
+    std::vector<Measurement> ms;
+    if (fs_ok) ms = load_recent_measurements(n_target);
+    int m = static_cast<int>(ms.size());
+
+    auto vy = [&](float v) -> int {
+        if (v < VMIN) v = VMIN;
+        if (v > VMAX) v = VMAX;
+        return BASE - (int)((v - VMIN) * (long)(BASE - TOPY) / (VMAX - VMIN) + 0.5f);
+    };
+
+    display.setFullWindow();
+    display.firstPage();
+    do {
+        display.fillScreen(GxEPD_WHITE);
+        // Оболочка 1:1 (чёрные пиксели шаблона; серая «слепая» зона не рисуется)
+        display.drawBitmap(0, 0, shell, sw, sh, GxEPD_BLACK);
+        // Заливка под кривой по позиции. Линейная интерполяция между записями.
+        if (m > 0) {
+            for (int x = PXL; x <= PXR; x++) {
+                float f = (float)(x - PXL) / (float)(PXR - PXL);
+                float pos = f * (n_target - 1);
+                float idx = pos - (float)(n_target - m);   // сдвиг, если истории мало
+                if (idx < 0.0f) continue;                  // слева ещё пусто — честно
+                int i0 = (int)idx; if (i0 > m - 1) i0 = m - 1;
+                int i1 = (i0 + 1 < m) ? i0 + 1 : i0;
+                float fr = idx - (float)i0;
+                float val = ms[i0].co2 * (1.0f - fr) + ms[i1].co2 * fr;
+                int y = vy(val);
+                display.fillRect(x, y, 1, BASE - y + 1, GxEPD_BLACK);
+            }
+        }
+        draw_mode_overlay(false);
+    } while (display.nextPage());
+    display.hibernate();
+}
+
+// Диспетчер: какой из 3 экранов рисовать.
+// screen 1 → график 24ч, screen 2 → график 7д (оба — пиксельные шаблоны).
+static void draw_current_screen(int screen, bool valid, uint16_t co2, float t, float h) {
     if (screen < 0 || screen >= N_SCREENS) screen = SCREEN_MAIN;
-    if (screen == SCREEN_MAIN) draw_main(valid, co2);
-    else                       draw_graph(screen - 1, valid, co2);
+    if (screen == SCREEN_MAIN)
+        draw_main(valid, co2, t, h);
+    else if (screen == 1)
+        draw_graph_template(GRAPH24_SHELL, GRAPH24_W, GRAPH24_H,
+                            (int)(GRAPH_WINDOW_SEC[1] / MEASUREMENT_INTERVAL));
+    else
+        draw_graph_template(GRAPH7D_SHELL, GRAPH7D_W, GRAPH7D_H,
+                            (int)(GRAPH_WINDOW_SEC[2] / MEASUREMENT_INTERVAL));
+}
+
+// Подтверждение смены режима: две строки по центру (показываем при долгом нажатии).
+static void draw_mode_message(const char* line1, const char* line2) {
+    display.setFullWindow();
+    display.firstPage();
+    do {
+        display.fillScreen(GxEPD_WHITE);
+        display.setTextColor(GxEPD_BLACK);
+        display.setTextSize(1);
+        int16_t bx, by; uint16_t bw, bh;
+        display.setFont(&FreeSansBold12pt7b);
+        display.getTextBounds(line1, 0, 0, &bx, &by, &bw, &bh);
+        display.setCursor((SCREEN_W - static_cast<int>(bw)) / 2, 56);
+        display.print(line1);
+        display.setFont(&FreeSans9pt7b);
+        display.getTextBounds(line2, 0, 0, &bx, &by, &bw, &bh);
+        display.setCursor((SCREEN_W - static_cast<int>(bw)) / 2, 80);
+        display.print(line2);
+    } while (display.nextPage());
+    display.hibernate();
 }
 
 static void wait_for_button_release() {
@@ -962,25 +1163,80 @@ static void go_to_sleep() {
 }
 
 // ------------------------------------------------------------
+// Режим НАСТРОЙКИ (SETUP): не спим, USB живой, показываем живые
+// значения. Замер делаем через delay() (НЕ light sleep!), иначе
+// USB-порт пропадёт на время измерения. Включается долгим нажатием.
+// ------------------------------------------------------------
+static uint32_t g_tuning_last_ms = 0;
+
+static void measure_awake(uint16_t& co2, float& t, float& h) {
+    co2 = 0; t = 0.0f; h = 0.0f;
+    for (int a = 0; a < 3; a++) {
+        if (scd4x.measureSingleShot()) { delay(100); continue; }
+        delay(5200);                       // ожидание готовности БЕЗ light sleep
+        if (scd4x.readMeasurement(co2, t, h)) { co2 = 0; continue; }
+        if (co2 > 0) return;
+    }
+}
+
+// Сессионные значения для режима настройки.
+static uint16_t g_tune_co2 = 0;
+static float    g_tune_t = 0.0f, g_tune_h = 0.0f;
+static bool     g_tune_valid = false;
+static int      g_btn_prev = HIGH;
+
+static void tuning_measure_and_store() {
+    if (!sensor_ok) return;
+    uint16_t co2 = 0; float t = 0.0f, h = 0.0f;
+    measure_awake(co2, t, h);
+    if (co2 > 0) {
+        g_tune_co2 = co2; g_tune_t = t; g_tune_h = h; g_tune_valid = true;
+        alert_active = update_alert_state(alert_active, co2);
+        Serial.printf("TUNE CO2 %u ppm, T %.1f C, RH %.0f%%  (alert=%d)\n",
+                      co2, t, h, alert_active ? 1 : 0);
+        // НЕ сохраняем: в SETUP-режиме данные искажены саморазогревом (T завышена,
+        // RH занижена) — это «грязь», нельзя пускать её в историю.
+    }
+}
+
+static void tuning_setup() {
+    Serial.println();
+    Serial.println("=== SETUP MODE: never sleep, USB stays up, CPU 240 MHz ===");
+    Serial.println("Hold button ~10s to return to NORMAL mode.");
+    Serial.printf("CPU @ %d MHz\n", getCpuFrequencyMhz());
+
+    pinMode(PIN_BUTTON, INPUT_PULLUP);
+    init_display();
+    init_filesystem();
+#if SEED_SYNTHETIC
+    if (fs_ok) seed_synthetic_once();
+#endif
+
+    wake_count = 1;                 // чистая инициализация датчика
+    init_sensor();
+    if (sensor_ok) {
+        scd4x.setTemperatureOffset(TEMPERATURE_OFFSET);
+        scd4x.wakeUp(); delay(30);
+    }
+
+    current_screen = SCREEN_MAIN;
+    tuning_measure_and_store();
+    draw_current_screen(current_screen, g_tune_valid, g_tune_co2, g_tune_t, g_tune_h);
+    g_tuning_last_ms = millis();
+    g_btn_prev = digitalRead(PIN_BUTTON);
+    Serial.println("SETUP ready: real UI on screen, button cycles screens. Reflash freely.");
+}
+
+// ------------------------------------------------------------
 // setup() / loop()
 // ------------------------------------------------------------
 
 void setup() {
-    // Снижаем частоту CPU: активная фаза — это в основном ожидание датчика и
-    // экрана (I/O), вычислений мало, скорость не нужна — а ток меньше. 80 МГц
-    // безопасно для UART/SPI/I2C. delay()/light sleep считаются по реальному
-    // времени, поэтому длительность замера не меняется.
-    setCpuFrequencyMhz(80);
-
     Serial.begin(115200);
     delay(100);
-    Serial.println();
-    Serial.println("============================");
-    Serial.println("CO2 Monitor (CO2-only UI, 1 button, 4 screens)");
-    Serial.println("============================");
-    Serial.printf("CPU @ %d MHz\n", getCpuFrequencyMhz());
 
-    // RTC magic + защита от мусора в current_screen.
+    // RTC magic + защита от мусора. Делаем В САМОМ НАЧАЛЕ — до выбора режима,
+    // потому что сам режим (tuning_mode) тоже живёт в RTC и должен быть валиден.
     if (rtc_magic != RTC_MAGIC) {
         rtc_magic = RTC_MAGIC;
         wake_count = 0;
@@ -996,9 +1252,28 @@ void setup() {
         last_shown_co2 = 0; last_shown_t = 0.0f; last_shown_h = 0.0f;
         last_shown_alert = false;
         last_shown_screen = -1;
+        tuning_mode = TUNING_MODE;   // дефолт режима при первой загрузке / после обесточивания
         Serial.println("First boot — RTC initialized");
     }
     if (current_screen < 0 || current_screen >= N_SCREENS) current_screen = 0;
+
+    // --- Режим SETUP (без сна): НЕ трогаем 240 МГц ради надёжного USB ---
+    if (tuning_mode) {
+        tuning_setup();
+        return;
+    }
+
+    // --- Нормальный режим ---
+    // Снижаем частоту CPU: активная фаза — это в основном ожидание датчика и
+    // экрана (I/O), вычислений мало, скорость не нужна — а ток меньше. 80 МГц
+    // безопасно для UART/SPI/I2C. delay()/light sleep считаются по реальному
+    // времени, поэтому длительность замера не меняется.
+    setCpuFrequencyMhz(80);
+    Serial.println();
+    Serial.println("============================");
+    Serial.println("CO2 Monitor (CO2-only UI, 1 button, 4 screens)");
+    Serial.println("============================");
+    Serial.printf("CPU @ %d MHz\n", getCpuFrequencyMhz());
     wake_count++;
 
     // Кнопка: при пробуждении ESP кладёт GPIO в обычный режим — поэтому
@@ -1015,10 +1290,28 @@ void setup() {
 
     init_display();
     init_filesystem();
+#if SEED_SYNTHETIC
+    if (fs_ok) seed_synthetic_once();
+#endif
     load_average_cache();   // если файла нет — g_cache остаётся нулевым
 
     if (from_button) {
-        // Кнопка: листаем экран по кругу (0→1→2→3→0), без измерения.
+        // Долгое удержание (~10 c) → переключение в SETUP-режим (без сна).
+        // millis() здесь ≈ время с момента пробуждения = с момента нажатия.
+        while (digitalRead(PIN_BUTTON) == LOW && millis() < LONG_PRESS_MS) delay(10);
+        if (digitalRead(PIN_BUTTON) == LOW) {
+            Serial.println("Long press -> switching to SETUP mode");
+            tuning_mode = 1;
+            draw_mode_message("SETUP MODE", "USB on - reflash freely");
+            while (digitalRead(PIN_BUTTON) == LOW) delay(10);   // дождаться отпускания
+            delay(50);
+            // Входим в режим без сна ПРЯМО СЕЙЧАС, без перезагрузки.
+            // Возвращаем 240 МГц (как в штатном SETUP — ради надёжного USB).
+            setCpuFrequencyMhz(240);
+            tuning_setup();
+            return;          // дальше прибор крутит loop() в SETUP-режиме
+        }
+        // Короткое нажатие: листаем экран по кругу (0→1→2→3→0), без измерения.
         int prev = current_screen;
         current_screen = cycle_screen(current_screen, N_SCREENS);
         Serial.printf("Button: screen %d -> %d\n", prev, current_screen);
@@ -1074,6 +1367,11 @@ void setup() {
                 rec.temp_x10  = static_cast<int16_t>(t * 10.0f);
                 rec.humidity  = static_cast<uint8_t>(h + 0.5f);
                 rec.flags     = 0;
+#if SEED_SYNTHETIC
+                // Пока включена синтетика — НЕ дописываем реальные замеры, иначе
+                // они «прилипают» к концу графика и портят чистую тестовую кривую.
+                Serial.println("SEED_SYNTHETIC: real measurement NOT saved");
+#else
                 save_measurement(rec);
 
                 // Пересчёт средних — раз в сутки (Этап 13).
@@ -1081,6 +1379,7 @@ void setup() {
                     recalculate_averages();
                     last_average_recalc_uptime = now_uptime;
                 }
+#endif
             } else {
                 Serial.println("No valid measurement (keeping previous, if any)");
             }
@@ -1104,7 +1403,7 @@ void setup() {
                      || values_changed || alert_changed;
 
     if (need_draw) {
-        draw_current_screen(current_screen, last_valid, last_co2);
+        draw_current_screen(current_screen, last_valid, last_co2, last_t, last_h);
         last_full_refresh_uptime = draw_uptime;
         last_shown_valid = last_valid;
         last_shown_co2 = last_co2;
@@ -1124,5 +1423,47 @@ void setup() {
 }
 
 void loop() {
-    go_to_sleep();
+    // В нормальном режиме setup() уходит в deep sleep и сюда не возвращается.
+    // Этот цикл крутится только в SETUP-режиме (без сна). Подстраховка:
+    if (!tuning_mode) { go_to_sleep(); return; }
+
+    // Опрос кнопки: короткое нажатие — листаем экраны, долгое (~10 c) — выходим
+    // обратно в нормальный режим. Плюс периодический замер с обновлением.
+    int btn = digitalRead(PIN_BUTTON);
+    if (g_btn_prev == HIGH && btn == LOW) {        // фронт нажатия
+        delay(30);                                 // антидребезг
+        if (digitalRead(PIN_BUTTON) == LOW) {
+            unsigned long t0 = millis();
+            while (digitalRead(PIN_BUTTON) == LOW && millis() - t0 < LONG_PRESS_MS) delay(10);
+            if (digitalRead(PIN_BUTTON) == LOW) {
+                Serial.println("Long press -> returning to NORMAL mode");
+                tuning_mode = 0;
+                draw_mode_message("NORMAL MODE", "sleep enabled");
+                while (digitalRead(PIN_BUTTON) == LOW) delay(10);
+                delay(50);
+                // Сразу в нормальный режим (сон). Следующее пробуждение
+                // (таймер/кнопка) пойдёт обычным путём. Без перезагрузки.
+                go_to_sleep();   // не возвращается
+            }
+            // Короткое нажатие: листаем экран по кругу.
+            current_screen = cycle_screen(current_screen, N_SCREENS);
+            Serial.printf("Button: screen -> %d\n", current_screen);
+            draw_current_screen(current_screen, g_tune_valid,
+                                g_tune_co2, g_tune_t, g_tune_h);
+        }
+    }
+    g_btn_prev = btn;
+
+    if (millis() - g_tuning_last_ms > 20000) {
+        uint16_t prev = g_tune_co2;
+        tuning_measure_and_store();
+        // Перерисовываем главный только при заметном изменении CO2 —
+        // чтобы e-paper не «моргал» полным обновлением каждые 20 сек.
+        if (current_screen == SCREEN_MAIN &&
+            abs((int)g_tune_co2 - (int)prev) >= 30)
+            draw_current_screen(current_screen, g_tune_valid,
+                                g_tune_co2, g_tune_t, g_tune_h);
+        g_tuning_last_ms = millis();
+    }
+    delay(20);
 }
